@@ -869,7 +869,7 @@ choose one and **Confirm** to open it, or tap the reference. Links without a
 visible target use a list instead. Press **Back** to return to your original
 reading position.
 
-After following an in-book link to a full chapter, sleeping or closing the book reopens on the last page read. Back retains the three most recent link origins across reopening and KOReader sync. If you close a transient footnote preview, the book resumes on the page that opened that preview, with any earlier link origins still available through Back.
+After following an in-book link to a full chapter, sleeping or closing the book reopens on the last page read. Back retains the three most recent link origins across reopening and KOReader sync; jumping to a **Search in Book** match records an origin the same way. While an origin is saved, the reader menu's **More** tab also offers **Go Back**, which shows the chapter it returns to. On touch devices without a Back button, such as the X4 Pro, use **Go Back**, or assign **Footnotes** to a shortcut: with **Quick-return from Footnotes** on, that shortcut returns to the saved origin. Pressing Back while the destination is still indexing cancels the indexing and returns to the origin. If you close a transient footnote preview, the book resumes on the page that opened that preview, with any earlier link origins still available through Back.
 
 ### System Navigation
 
@@ -899,7 +899,7 @@ EPUB books use the same five icon tabs on touch and button devices:
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Font** (letters)       | Reader Font, Dictionary Font, Line/Word Spacing, text anti-aliasing, Focus Reading, Guide Dots                                                                  |
 | **Layout** (text lines)  | Margins, Orientation, Alignment, Images, Hyphenation, Publisher Page Numbers, paragraph spacing and publisher styling                                           |
-| **More** (three dots)    | Word lookup, Select Chapter, Go to %, Go to Stable Page when available, Auto Page Turn, Footnotes; Reading Stats on button devices when tracking is enabled     |
+| **More** (three dots)    | Search in Book, Go Back (after a link or search jump), Word lookup, Select Chapter, Go to %, Go to Stable Page when available, Auto Page Turn, Footnotes; Reading Stats on button devices when tracking is enabled |
 | **Bookmarks** (bookmark) | Add/remove and view bookmarks, create/view clippings, screenshot, position QR; Sync Progress, Nearby Position Sync, and Send Nearby Book on button devices      |
 | **Settings** (gear)      | Status Bars, Controls, Book Dictionary, EPUB Render Mode, Indexing Method, finished status, Track Reading Stats, cache/stats resets, Reset Book Reader Settings |
 

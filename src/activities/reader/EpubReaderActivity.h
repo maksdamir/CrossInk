@@ -13,6 +13,7 @@
 #include <string>
 
 #include "BookReadingStats.h"
+#include "BookSearchSession.h"
 #include "BookmarkStore.h"
 #include "EndOfBookOptions.h"
 #include "EpubLinkReturnState.h"
@@ -115,6 +116,13 @@ class EpubReaderActivity final : public Activity {
   int activeSectionFontId = 0;
   uint32_t activeSectionLayoutSignature = 0;
   std::optional<uint16_t> pendingPageJump;
+  std::unique_ptr<BookSearchSession> bookSearch;
+  struct SearchLanding {
+    bool valid = false;
+    int returnDepth = 0;  // footnoteDepth right after the jump
+    uint16_t spineIndex = 0;
+    uint32_t visibleTextOffset = 0;
+  } lastSearchLanding;
   // Set when navigating to a footnote href with a fragment (e.g. #note1).
   // Cleared on the next render after the new section loads and resolves it to a page.
   std::string pendingAnchor;
@@ -297,7 +305,8 @@ class EpubReaderActivity final : public Activity {
   std::atomic<bool> silentPrefetchBuildActive{false};
   std::atomic<bool> silentPrefetchCancelRequested{false};
   std::atomic<bool> sectionBuildCancelRequested{false};
-  std::atomic<bool> goHomeAfterBuildCancel{false};
+  // Back pressed while indexing: once the build stops, do what an idle Back does.
+  std::atomic<bool> backAfterBuildCancel{false};
 
   // Last position successfully persisted by saveProgress, used to skip redundant
   // writeAtomic calls on no-op re-renders.
@@ -443,6 +452,16 @@ class EpubReaderActivity final : public Activity {
   bool executeShortPowerButtonAction();
   bool executeLongPowerButtonAction();
   void handleClippingJump(const ClippingJumpResult& clipping);
+  // In-book search: the session keeps the query, results and scan position
+  // until the book closes. Allocated on first use (results buffer included).
+  void openBookSearch(bool returnToReaderMenu);
+  void promptBookSearchQuery(bool returnToReaderMenu);
+  void showBookSearchResults();
+  void jumpToSearchResult(const BookSearchJumpResult& hit);
+  // True while the reader still shows the page the last search jump landed on,
+  // with the return stack untouched since. Another jump from there is a hop
+  // between matches and must not bury the original reading position.
+  bool isOnLastSearchLanding() const;
   bool handleTouchDictionaryLookup();
   void openWordSelect(bool framebufferContainsPage, int initialTouchX = -1, int initialTouchY = -1,
                       bool autoLookupInitialWord = false);

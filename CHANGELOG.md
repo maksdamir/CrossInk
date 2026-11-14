@@ -1,3 +1,14 @@
+## [Unreleased]
+
+### Added
+
+- Search the text of the open EPUB from the reader menu's More tab with **Search in Book**. Matches ignore case and accents, list their chapter and surrounding text as they are found, and open on the page that contains them. Results stay available until the book is closed.
+- Return from a search match to where you were reading with **Back** or the new **Go Back** item in the reader menu's More tab, which also returns from followed in-book links and shows the chapter it leads back to.
+
+### Fixed
+
+- Pressing Back while a followed link or search match is still indexing returns to the previous position instead of closing the book.
+
 ## [v1.6.1] - 2026-10-03
 
 ### Added

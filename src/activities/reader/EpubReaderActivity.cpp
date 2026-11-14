@@ -42,6 +42,7 @@
 #include "EpubReaderFootnoteSelectActivity.h"
 #include "EpubReaderFootnotesActivity.h"
 #include "EpubReaderPercentSelectionActivity.h"
+#include "EpubReaderSearchActivity.h"
 #include "EpubReaderUtils.h"
 #include "FocusReadingText.h"
 #include "GlobalActions.h"
@@ -66,6 +67,7 @@
 #include "activities/settings/StatusBarSettingsActivity.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
+#include "activities/util/KeyboardEntryActivity.h"
 #include "clippings/ClippingHighlightGeometry.h"
 #include "clippings/ClippingMatchTracker.h"
 #include "clippings/ClippingTextMatcher.h"
@@ -2608,6 +2610,12 @@ void EpubReaderActivity::openReaderMenu() {
     requestUpdate();
     return;
   }
+  {
+    // Reads the chapter title from the book's metadata cache; serialize SD access
+    // with the render task like the metadata reads above.
+    RenderLock lock(*this);
+    menuActivity->setGoBackSpine(footnoteDepth > 0 ? savedPositions[footnoteDepth - 1].spineIndex : -1);
+  }
   startActivityForResult(std::move(menuActivity), [this](const ActivityResult& result) {
 #if !CROSSINK_APP_CAP_TOUCH
     const auto heapAfterMenu = MemoryBudget::snapshot();
@@ -2857,9 +2865,15 @@ void EpubReaderActivity::loop() {
     backgroundBuildYieldForInput.store(true, std::memory_order_relaxed);
   }
 
-  if (goHomeAfterBuildCancel.load(std::memory_order_relaxed) && !RenderLock::peek()) {
-    goHomeAfterBuildCancel.store(false, std::memory_order_relaxed);
+  if (backAfterBuildCancel.load(std::memory_order_relaxed) && !RenderLock::peek()) {
+    backAfterBuildCancel.store(false, std::memory_order_relaxed);
     sectionBuildCancelRequested.store(false, std::memory_order_relaxed);
+    // Same as an idle short Back: return along the link/search history first,
+    // so Back during a jump's "Indexing" wait goes back instead of closing the book.
+    if (footnoteDepth > 0) {
+      restoreSavedPosition();
+      return;
+    }
     onGoHome();
     return;
   }
@@ -2867,7 +2881,7 @@ void EpubReaderActivity::loop() {
   if (RenderLock::peek() && !touch.prev && !touch.next && mappedInput.wasReleased(MappedInputManager::Button::Back) &&
       mappedInput.getHeldTime() < ReaderUtils::GO_HOME_MS) {
     sectionBuildCancelRequested.store(true, std::memory_order_relaxed);
-    goHomeAfterBuildCancel.store(true, std::memory_order_relaxed);
+    backAfterBuildCancel.store(true, std::memory_order_relaxed);
     automaticPageTurnActive = false;
     LOG_DBG("ERS", "Back requested while EPUB indexing is busy; cancelling build");
     return;
@@ -3612,6 +3626,155 @@ void EpubReaderActivity::handleClippingJump(const ClippingJumpResult& clipping) 
   pauseReadingPaceTimer("clipping_jump");
 }
 
+void EpubReaderActivity::openBookSearch(const bool returnToReaderMenu) {
+  if (!bookSearch) {
+    // Small bookkeeping object; the results buffer is allocated by start().
+    bookSearch = makeUniqueNoThrow<BookSearchSession>();
+    if (!bookSearch) {
+      LOG_ERR("SRCH", "Could not allocate the search session");
+      drawToast(renderer, tr(STR_SEARCH_OUT_OF_MEMORY));
+      delay(1000);
+      requestUpdate();
+      return;
+    }
+  }
+  if (bookSearch->hasQuery()) {
+    const booksearch::ScanOptions options = BookSearchSession::optionsFromSettings();
+    if (bookSearch->options() != options) {
+      // Images or publisher styles changed since the search ran, so its offsets
+      // no longer match this layout. Run the same query again rather than jump
+      // to the wrong pages.
+      LOG_INF("SRCH", "Layout settings changed since the last search; searching again");
+      const std::string query = bookSearch->queryText();
+      RenderLock lock(*this);
+      bookSearch->start(query, epub->getSpineItemsCount(), options);
+    }
+    showBookSearchResults();
+    return;
+  }
+  promptBookSearchQuery(returnToReaderMenu);
+}
+
+void EpubReaderActivity::promptBookSearchQuery(const bool returnToReaderMenu) {
+  pauseReadingPaceTimer("book_search");
+  auto keyboard =
+      makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_SEARCH_IN_BOOK), bookSearch->queryText(),
+                                               booksearch::MAX_QUERY_BYTES, InputType::Text);
+  if (!keyboard) {
+    LOG_ERR("SRCH", "Could not allocate the search keyboard");
+    resumeReadingPaceTimer("book_search_alloc_failed");
+    requestUpdate();
+    return;
+  }
+  startActivityForResult(std::move(keyboard), [this, returnToReaderMenu](const ActivityResult& result) {
+    const auto* text = std::get_if<KeyboardResult>(&result.data);
+    bool started = false;
+    if (!result.isCancelled && text) {
+      RenderLock lock(*this);
+      started = bookSearch->start(text->text, epub->getSpineItemsCount(), BookSearchSession::optionsFromSettings());
+    }
+    if (started) {
+      showBookSearchResults();
+      return;
+    }
+    resumeReadingPaceTimer("book_search_cancelled");
+    if (bookSearch->outOfMemory()) {
+      drawToast(renderer, tr(STR_SEARCH_OUT_OF_MEMORY));
+      delay(1000);
+    }
+    if (returnToReaderMenu && result.isCancelled) {
+      openReaderMenu();
+    } else {
+      requestUpdate();
+    }
+  });
+}
+
+void EpubReaderActivity::showBookSearchResults() {
+  pauseReadingPaceTimer("book_search");
+  auto results = makeUniqueNoThrow<EpubReaderSearchActivity>(renderer, mappedInput, epub, *bookSearch);
+  if (!results) {
+    LOG_ERR("SRCH", "Could not allocate the search results screen");
+    resumeReadingPaceTimer("book_search_alloc_failed");
+    drawToast(renderer, tr(STR_SEARCH_OUT_OF_MEMORY));
+    delay(1000);
+    requestUpdate();
+    return;
+  }
+  startActivityForResult(std::move(results), [this](const ActivityResult& result) {
+    if (const auto* hit = std::get_if<BookSearchJumpResult>(&result.data); hit && !result.isCancelled) {
+      jumpToSearchResult(*hit);
+    } else {
+      resumeReadingPaceTimer("book_search_closed");
+    }
+    requestUpdate();
+  });
+}
+
+void EpubReaderActivity::jumpToSearchResult(const BookSearchJumpResult& hit) {
+  if (static_cast<int>(hit.spineIndex) >= epub->getSpineItemsCount()) {
+    LOG_ERR("SRCH", "Search hit spine %u is out of range", static_cast<unsigned>(hit.spineIndex));
+    resumeReadingPaceTimer("book_search_bad_hit");
+    return;
+  }
+  LOG_DBG("SRCH", "Jumping to spine %u visible offset %lu", static_cast<unsigned>(hit.spineIndex),
+          static_cast<unsigned long>(hit.visibleTextOffset));
+  clearPendingManualPageTurns();
+  RenderLock lock(*this);
+  // Record where to return to, on the same stack in-book links use, so Back and
+  // Go Back lead back to the reading position. A footnote preview already
+  // pushed its origin, and a hop from one match's page to another match keeps
+  // the position the first jump recorded.
+  if (!activeFootnotePreview && !isOnLastSearchLanding()) {
+    EpubLinkReturnState::push(savedPositions, footnoteDepth,
+                              {currentSpineIndex, section ? section->currentPage : nextPageNumber});
+    LOG_DBG("SRCH", "Recorded return position spine %d page %d (depth %d)",
+            savedPositions[footnoteDepth - 1].spineIndex, savedPositions[footnoteDepth - 1].pageNumber, footnoteDepth);
+  } else {
+    LOG_DBG("SRCH", "Hop between matches; keeping return position (depth %d)", footnoteDepth);
+  }
+  clearFootnotePreviewState();
+  currentSpineIndex = hit.spineIndex;
+  lastSearchLanding = {true, footnoteDepth, hit.spineIndex, hit.visibleTextOffset};
+  // Reuse the saved-progress restore path: once the section is loaded (or
+  // built far enough), applyDeferredReposition() turns the visible-text offset
+  // into a page, so cached and never-opened chapters land the same way.
+  cachedSpineIndex = hit.spineIndex;
+  cachedVisibleTextOffset = hit.visibleTextOffset;
+  cachedChapterPageNumber = 0;
+  cachedChapterTotalPageCount = 0;
+  cachedPageParagraphIndex = UINT16_MAX;
+  cachedPageParagraphOffset = 0;
+  cachedPageParagraphSpan = 0;
+  pendingRelayoutReposition = true;
+  pendingAnchor.clear();
+  pendingPageJump.reset();
+  pendingParagraphIndex = UINT16_MAX;
+  pendingClippingIndex = UINT16_MAX;
+  pendingPercentJump = false;
+  nextPageNumber = 0;
+  section.reset();
+  armReadingPaceWarmup("search_jump");
+  pauseReadingPaceTimer("search_jump");
+}
+
+bool EpubReaderActivity::isOnLastSearchLanding() const {
+  if (!lastSearchLanding.valid || footnoteDepth != lastSearchLanding.returnDepth || !section || activeFootnotePreview ||
+      currentSpineIndex != lastSearchLanding.spineIndex) {
+    return false;
+  }
+  const int page = section->currentPage;
+  if (page < 0 || page >= static_cast<int>(section->pageCount)) return false;
+  // The landing page is the one whose text range holds the hit's offset, the
+  // same rule getPageForVisibleTextOffset() used to choose it.
+  const uint32_t target = lastSearchLanding.visibleTextOffset;
+  const auto start = section->getVisibleTextOffsetForPage(static_cast<uint16_t>(page));
+  if (!start || *start > target) return false;
+  if (*start == target || page + 1 >= static_cast<int>(section->pageCount)) return true;
+  const auto next = section->getVisibleTextOffsetForPage(static_cast<uint16_t>(page + 1));
+  return !next || *next > target;
+}
+
 #if CROSSINK_APP_CAP_TOUCH
 bool EpubReaderActivity::handlePinchFontResize() {
   if (!SETTINGS.pinchFontResizeEnabled || !SETTINGS.touchReaderControls || !mappedInput.supportsMultiTouch()) {
@@ -3839,6 +4002,15 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuAction action, const 
               requestUpdate();
             }
           });
+      break;
+    }
+    case EpubReaderMenuAction::SEARCH_IN_BOOK: {
+      openBookSearch(returnToReaderMenu);
+      break;
+    }
+    case EpubReaderMenuAction::GO_BACK: {
+      // Same as Back on a page with history: pop the link-return stack.
+      restoreSavedPosition();
       break;
     }
     case EpubReaderMenuAction::FOOTNOTES: {
@@ -8089,6 +8261,16 @@ void EpubReaderActivity::restoreSavedPosition() {
     RenderLock lock(*this);
     clearFootnotePreviewState();
     pendingAnchor.clear();
+    // An explicit return supersedes any reposition still pending from the jump
+    // that left this position (Back pressed while that jump was indexing):
+    // otherwise a same-chapter jump would re-apply its target after the restore.
+    cachedVisibleTextOffset.reset();
+    pendingRelayoutReposition = false;
+    cachedChapterPageNumber = 0;
+    cachedChapterTotalPageCount = 0;
+    cachedPageParagraphIndex = UINT16_MAX;
+    cachedPageParagraphOffset = 0;
+    cachedPageParagraphSpan = 0;
     currentSpineIndex = pos.spineIndex;
     nextPageNumber = pos.pageNumber;
     section.reset();

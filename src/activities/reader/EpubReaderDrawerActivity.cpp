@@ -11,6 +11,7 @@
 #include <Memory.h>
 #include <MemoryBudget.h>
 #include <SdCardFontSystem.h>
+#include <Utf8.h>
 
 #include <algorithm>
 #include <cmath>
@@ -442,13 +443,21 @@ EpubReaderDrawerActivity::EpubReaderDrawerActivity(
   previewDirty = !mappedInput.hasTouchHardware();
 }
 
+void EpubReaderDrawerActivity::setGoBackSpine(const int spineIndex) {
+  hasGoBack = spineIndex >= 0 && epub && spineIndex < epub->getSpineItemsCount();
+  goBackChapterTitle.clear();
+  if (!hasGoBack) return;
+  const int tocIndex = epub->getTocIndexForSpineIndex(spineIndex);
+  if (tocIndex >= 0) goBackChapterTitle = epub->getTocItem(tocIndex).title;
+}
+
 void EpubReaderDrawerActivity::onEnter() {
   Activity::onEnter();
   if (mappedInput.hasTouchHardware()) mappedInput.setReaderTouchscreenOverride(true);
 
   const ReaderDrawerCatalog catalog = makeReaderDrawerCatalog(
       {hasFootnotes, hasDictionary, hasBookmarks, hasClippings, showReadingPaceReset, stablePageCount > 0,
-       !mappedInput.hasTouchHardware(), globalStatsEnabled, bookStatsEnabled});
+       !mappedInput.hasTouchHardware(), globalStatsEnabled, bookStatsEnabled, hasGoBack});
   for (size_t tab = 0; tab < rootRows.size(); ++tab) {
     rootRows[tab].reserve(catalog[tab].count);
     rootRows[tab].assign(catalog[tab].items.begin(), catalog[tab].items.begin() + catalog[tab].count);
@@ -1704,6 +1713,13 @@ void EpubReaderDrawerActivity::activateRow(const RowId row) {
       return;
     case RowId::SelectChapter:
       closeAndReturn(false, EpubReaderMenuAction::SELECT_CHAPTER, !mappedInput.hasTouchHardware());
+      return;
+    case RowId::SearchInBook:
+      closeAndReturn(false, EpubReaderMenuAction::SEARCH_IN_BOOK, !mappedInput.hasTouchHardware());
+      return;
+    case RowId::GoBack:
+      // Lands on the restored page; reopening the menu there would hide it.
+      closeAndReturn(false, EpubReaderMenuAction::GO_BACK, false);
       return;
     case RowId::GoToPercent:
       openPane(ReaderDrawerPane::Percent);
@@ -2995,6 +3011,10 @@ const char* EpubReaderDrawerActivity::rowLabel(const RowId row) const {
       return tr(STR_IMAGES);
     case RowId::SelectChapter:
       return tr(STR_SELECT_CHAPTER);
+    case RowId::SearchInBook:
+      return tr(STR_SEARCH_IN_BOOK);
+    case RowId::GoBack:
+      return tr(STR_GO_BACK);
     case RowId::GoToPercent:
       return tr(STR_GO_TO_PERCENT);
     case RowId::GoToStablePage:
@@ -3083,6 +3103,17 @@ const char* EpubReaderDrawerActivity::rowLabel(const RowId row) const {
 
 const char* EpubReaderDrawerActivity::rowValue(const RowId row, char* buffer, const size_t bufferSize) const {
   switch (row) {
+    case RowId::GoBack: {
+      if (goBackChapterTitle.empty() || bufferSize == 0) return nullptr;
+      // Setting rows draw their value at full width and give the label what is
+      // left, so fit a long chapter title into part of the row.
+      const std::string fitted =
+          renderer.truncatedText(SMALL_FONT_ID, goBackChapterTitle.c_str(), renderer.getScreenWidth() * 2 / 5);
+      const int len = utf8SafeTruncateBuffer(fitted.data(), static_cast<int>(std::min(fitted.size(), bufferSize - 1)));
+      memcpy(buffer, fitted.data(), static_cast<size_t>(len));
+      buffer[len] = '\0';
+      return buffer;
+    }
     case RowId::FontFamily: {
       if (draft.sdFontFamilyName[0] != '\0') return draft.sdFontFamilyName.data();
       static constexpr std::array<StrId, CrossPointSettings::BUILTIN_FONT_COUNT> labels = {StrId::STR_LEXEND_DECA,

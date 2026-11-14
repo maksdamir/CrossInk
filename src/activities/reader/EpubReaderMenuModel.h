@@ -35,6 +35,8 @@ enum class EpubReaderMenuAction : uint8_t {
   SET_BOOK_DICTIONARY,
   STATUS_BAR_SETTINGS,
   RESET_BOOK_READER_SETTINGS,
+  SEARCH_IN_BOOK,
+  GO_BACK,
 };
 
 enum class ReaderDrawerTab : uint8_t { Font = 0, Layout = 1, More = 2, Location = 3, Settings = 4, Count };
@@ -150,6 +152,8 @@ enum class ReaderDrawerCatalogItem : uint8_t {
   SyncProgress,
   NearbyPositionSync,
   SendNearbyBook,
+  SearchInBook,
+  GoBack,
 };
 
 struct ReaderDrawerAvailability {
@@ -162,6 +166,8 @@ struct ReaderDrawerAvailability {
   bool buttonDevice = false;
   bool globalStatsEnabled = true;
   bool bookStatsEnabled = true;
+  // A link or search jump left a position to return to (the link-return stack).
+  bool hasReturnPosition = false;
 };
 
 struct ReaderDrawerTabCatalog {
@@ -195,6 +201,8 @@ constexpr ReaderDrawerCatalog makeReaderDrawerCatalog(const ReaderDrawerAvailabi
   layout.add(ReaderDrawerCatalogItem::EmbeddedStyle);
 
   auto& more = catalog[static_cast<size_t>(ReaderDrawerTab::More)];
+  more.add(ReaderDrawerCatalogItem::SearchInBook);
+  if (available.hasReturnPosition) more.add(ReaderDrawerCatalogItem::GoBack);
   if (available.hasDictionary) {
     more.add(ReaderDrawerCatalogItem::Lookup);
     more.add(ReaderDrawerCatalogItem::LookupHistory);

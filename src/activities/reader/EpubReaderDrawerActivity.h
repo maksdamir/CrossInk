@@ -55,6 +55,10 @@ class EpubReaderDrawerActivity final : public Activity {
            state.selectedIndex < activeTopIndex() + visibleRows;
   }
 #endif
+  // Offer "Go Back" to the given spine item (the top of the reader's link-return
+  // stack). Call before the drawer starts; -1, the default, hides the row.
+  void setGoBackSpine(int spineIndex);
+
   void onEnter() override;
   void onExit() override;
   void loop() override;
@@ -132,6 +136,8 @@ class EpubReaderDrawerActivity final : public Activity {
   bool globalStatsEnabled = true;
   bool bookStatsEnabled = true;
   bool isCurrentPageBookmarked = false;
+  bool hasGoBack = false;
+  std::string goBackChapterTitle;  // Shown as the Go Back row's value; resolved once in setGoBackSpine().
   bool isBookCompleted = false;
   bool showReadingPaceReset = false;
   bool settingsChanged = false;
