@@ -869,6 +869,17 @@ choose one and **Confirm** to open it, or tap the reference. Links without a
 visible target use a list instead. Press **Back** to return to your original
 reading position.
 
+A tapped note opens as a preview that starts at the note. Choosing a note from
+**Footnotes** opens a preview too when the note is in another part of the book,
+and otherwise moves to the note within the chapter. Keep turning pages to read
+a long note to its end: the preview carries on through the notes that follow,
+up to the end of that part of the book, and lays out pages as you go. The
+status bar's page count shows your place in the preview, counting the pages
+from the note to the end of those notes; `~` marks an estimate, which settles as
+more pages are laid out. To leave it, press **Back**, or on touch devices tap
+the back arrow at the top of the screen or turn back by touch from its first
+page.
+
 After following an in-book link to a full chapter, sleeping or closing the book reopens on the last page read. Back retains the three most recent link origins across reopening and KOReader sync; jumping to a **Search in Book** match records an origin the same way. While an origin is saved, the reader menu's **More** tab also offers **Go Back**, which shows the chapter it returns to. On touch devices without a Back button, such as the X4 Pro, use **Go Back**, or assign **Footnotes** to a shortcut: with **Quick-return from Footnotes** on, that shortcut returns to the saved origin. Pressing Back while the destination is still indexing cancels the indexing and returns to the origin. If you close a transient footnote preview, the book resumes on the page that opened that preview, with any earlier link origins still available through Back.
 
 ### System Navigation

@@ -43,6 +43,9 @@ struct ReaderStatusBarContent {
   const char* autoTurnLabel = nullptr;
   bool bookmarked = false;
   bool showProgress = true;
+  // The chapter page count has its own switch: a footnote preview hides book and chapter
+  // progress (showProgress) but still shows its page count.
+  bool showPageCount = true;
   bool pageCountEstimated = false;
   bool darkMode = false;
   int edgePadding = 0;

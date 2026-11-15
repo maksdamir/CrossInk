@@ -341,6 +341,11 @@ class EpubReaderActivity final : public Activity {
   bool shouldUseFootnotePreview(int targetSpineIndex, const std::string& anchor) const;
   std::string footnotePreviewCacheSuffix(EpubRenderMode renderMode, const std::string& anchor) const;
   void clearFootnotePreviewState();
+  // Drops a footnote preview whose layout failed and, when the link history has an
+  // origin, returns to it. Returns false when there was no origin to return to. The caller
+  // must already hold RenderLock (render() or a locked loop() path): unlike
+  // restoreSavedPosition() it does not take the lock itself.
+  bool returnFromFailedFootnotePreview();
   void silentIndexNextChapterIfNeeded(uint16_t viewportWidth, uint16_t viewportHeight);
   void cancelSilentPrefetchForInput();
   bool restoreCurrentPageBufferAfterSilentIndex();

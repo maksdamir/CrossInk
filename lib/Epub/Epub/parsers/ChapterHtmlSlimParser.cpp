@@ -602,6 +602,12 @@ bool ChapterHtmlSlimParser::handlePreviewScanStart(const XML_Char** atts) {
 
 void ChapterHtmlSlimParser::startPreviewAtAnchor() {
   previewAnchorFound = true;
+  // Byte offset of the element the preview starts at (the parse began at file offset 0, so
+  // the parser's index is the file offset). Progress is then the read position minus this:
+  // up to one parse buffer ahead of the layout, the same lead a chapter's estimate has from
+  // byte 0. Called only from an element handler, where the index is the current event's.
+  const XML_Index startByte = activeParser ? XML_GetCurrentByteIndex(activeParser) : -1;
+  previewStartBytes_ = startByte >= 0 ? static_cast<size_t>(startByte) : parseBytesConsumed();
   completedPageCount = 0;
   currentPageNextY = 0;
   pendingAnchorId.clear();
@@ -3975,7 +3981,10 @@ ChapterHtmlSlimParser::ParseStatus ChapterHtmlSlimParser::parseStep() {
     }
     LOG_ERR("EHP", "Parse error at line %lu:\n%s", XML_GetCurrentLineNumber(activeParser),
             XML_ErrorString(XML_GetErrorCode(activeParser)));
-    if (isPreviewBuild()) {
+    // A preview that never reached its anchor has nothing to show. Once it has, a
+    // preview runs on to the end of the spine like a chapter, so keep the pages laid out
+    // so far, as a chapter does, rather than failing the whole note.
+    if (isScanningForPreviewAnchor()) {
       return ParseStatus::Error;
     }
     malformedMarkupTruncated = true;

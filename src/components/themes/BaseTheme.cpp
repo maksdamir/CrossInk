@@ -900,7 +900,7 @@ void BaseTheme::drawReaderStatusBar(const GfxRenderer& renderer, const ReaderSta
       case ReaderStatusBarItem::TimeLeftChapter:
         return content.timeLeftChapter;
       case ReaderStatusBarItem::ChapterPageCount:
-        if (!content.showProgress || content.chapterPageCount <= 0) return nullptr;
+        if (!content.showPageCount || content.chapterPageCount <= 0) return nullptr;
         snprintf(scratch, len, "%s%d/%d", content.pageCountEstimated ? "~" : "", content.chapterPage,
                  content.chapterPageCount);
         return scratch;

@@ -115,6 +115,9 @@ class ChapterHtmlSlimParser {
   uint16_t previewMaxPages = 0;
   bool previewAnchorFound = false;
   bool previewStopRequested = false;
+  // Input byte offset of the element a footnote preview starts laying out pages at; 0 for
+  // chapters and until the preview anchor is found. See estimateBytesConsumed().
+  size_t previewStartBytes_ = 0;
   // Element ordinals (1-based, counting every startElement) used to start a footnote preview at the
   // block enclosing the anchor rather than at the anchor itself. 0 means "no block located".
   uint32_t previewStartOrdinal = 0;
@@ -376,4 +379,15 @@ class ChapterHtmlSlimParser {
   // between beginParse() and finishParse()/abortParse().
   size_t parseBytesConsumed() { return parseFile_ ? parseFile_.position() : parseFileOffset_; }
   size_t parseTotalBytes() { return parseFileSize_; }
+  // The same progress over only the input that can produce pages, for page-count estimates.
+  // A footnote preview lays out pages from its anchor on, so its progress counts from where
+  // the preview started: counting the bytes skipped before the anchor would make a note deep
+  // in a long notes file look nearly finished after its first page.
+  size_t estimateBytesConsumed() {
+    const size_t consumed = parseBytesConsumed();
+    return consumed > previewStartBytes_ ? consumed - previewStartBytes_ : 0;
+  }
+  size_t estimateTotalBytes() const {
+    return parseFileSize_ > previewStartBytes_ ? parseFileSize_ - previewStartBytes_ : 0;
+  }
 };
