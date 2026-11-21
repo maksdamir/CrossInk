@@ -13,6 +13,7 @@
 ### Fixed
 
 - Pressing Back while a followed link or search match is still indexing returns to the previous position instead of closing the book.
+- With hyphenation on, a footnote link near the top of a page could not be tapped and was missing from that page's footnote list, because the note was listed on the page before instead. Books re-index once when first opened after this update.
 
 ## [v1.6.1] - 2026-10-03
 

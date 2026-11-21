@@ -9,6 +9,7 @@
 #include <GfxRenderer.h>
 
 #include <algorithm>
+#include <cstring>
 
 std::vector<Hyphenator::BreakInfo> Hyphenator::breakOffsets(const std::string&, bool) { return {}; }
 
@@ -24,14 +25,51 @@ bool computeVisualWordOrder(const std::vector<std::string>& words, bool, std::ve
 
 TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<int16_t>& wordXpos,
                      const std::vector<EpdFontFamily::Style>&, const std::vector<uint8_t>&,
-                     const std::vector<uint16_t>&, const std::vector<uint16_t>&, const std::vector<uint8_t>&,
+                     const std::vector<uint16_t>&, const std::vector<uint16_t>&, const std::vector<uint8_t>& wordFlags,
                      const std::vector<bool>&, const BlockStyle& blockStyle, std::vector<std::string> rubyTexts)
     : blockStyle(blockStyle), numWords(static_cast<uint16_t>(words.size())), rubyTexts(std::move(rubyTexts)) {
   if (wordXpos.empty()) return;
-  arena = std::make_unique<uint8_t[]>(wordXpos.size() * sizeof(int16_t));
-  auto* positions = reinterpret_cast<int16_t*>(arena.get());
+  // Positions are always kept. Word text and flags (which carry link ids) are kept too when
+  // there is one entry per word, so tests can see what each line shows.
+  // Arena layout: int16 positions, then uint16 text offsets, flags, and NUL-terminated text.
+  const bool keepText = words.size() == wordXpos.size();
+  const bool keepFlags = keepText && wordFlags.size() == words.size();
+  const size_t positionBytes = wordXpos.size() * sizeof(int16_t);
+  const size_t offsetBytes = keepText ? words.size() * sizeof(uint16_t) : 0;
+  const size_t flagBytes = keepFlags ? wordFlags.size() : 0;
+  size_t textSize = 0;
+  if (keepText) {
+    for (const auto& word : words) textSize += word.size() + 1;
+  }
+  arena = std::make_unique<uint8_t[]>(positionBytes + offsetBytes + flagBytes + textSize);
+  uint8_t* cursor = arena.get();
+
+  auto* positions = reinterpret_cast<int16_t*>(cursor);
   std::copy(wordXpos.begin(), wordXpos.end(), positions);
   xposArr = positions;
+  cursor += positionBytes;
+  if (!keepText) return;
+
+  auto* offsets = reinterpret_cast<uint16_t*>(cursor);
+  cursor += offsetBytes;
+
+  if (keepFlags) {
+    std::copy(wordFlags.begin(), wordFlags.end(), cursor);
+    wordFlagsArr = cursor;
+    wordFlagsPresent = true;
+    cursor += flagBytes;
+  }
+
+  auto* text = reinterpret_cast<char*>(cursor);
+  uint16_t offset = 0;
+  for (size_t i = 0; i < words.size(); ++i) {
+    offsets[i] = offset;
+    std::memcpy(text + offset, words[i].c_str(), words[i].size() + 1);
+    offset = static_cast<uint16_t>(offset + words[i].size() + 1);
+  }
+  textOffArr = offsets;
+  textArr = text;
+  textBytes = offset;
 }
 bool TextBlock::hasRuby() const { return false; }
 

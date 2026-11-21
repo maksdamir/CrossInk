@@ -548,6 +548,17 @@ Binary layout:
 
 ## `section.bin`
 
+### Version 92
+
+Each page's footnote list holds the links that page shows. Earlier versions could
+list a link on the page before it when hyphenation or a long-word break split
+words earlier in the paragraph, which left the link untappable on its own page.
+The payload is unchanged from version 83. Complete files use byte `92`; suspended
+partials use `0xCD`. Versions 84-91 and partial markers `0xC5`-`0xCC` are skipped
+because upstream 2.0 development builds used them for different layouts. Older
+full and partial caches, including v1.6.1's `83` and `0xC4`, rebuild
+automatically, as do footnote preview caches.
+
 ### Version 83
 
 Nested paragraphs and other blocks retain inherited CSS bold and italic styles,

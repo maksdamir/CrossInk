@@ -253,6 +253,16 @@ class ChapterHtmlSlimParser {
   int currentFootnoteLinkTextLen = 0;
   std::vector<std::pair<int, FootnoteEntry>> pendingFootnotes;  // <wordIndex, entry>
   int wordsExtractedInBlock = 0;
+  // Per link id (one bit each, ids 1-63), used to keep a note on the pages that show its link
+  // text. A link's word index cannot be trusted for that: hyphenation and long-word breaks add
+  // words during layout, so the index runs ahead of the laid-out lines.
+  uint64_t footnoteLinksWithWords = 0;  // the link's text was added to the paragraph as words
+  uint64_t footnoteLinksShown = 0;      // a laid-out line has shown the pending link's words
+  bool currentFootnoteLinkHasWords = false;
+  static constexpr uint64_t footnoteLinkBit(const uint8_t linkId) {
+    return linkId == 0 || linkId > 63 ? 0 : uint64_t{1} << linkId;
+  }
+  void retirePendingFootnotes(uint64_t linksOnLine);
 
   struct PendingPublisherPageMarker {
     int wordIndex = 0;

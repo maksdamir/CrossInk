@@ -33,11 +33,14 @@ constexpr uint32_t SECTION_CACHE_MAGIC = 0x535843FF;  // bytes: 0xFF, "CXS"
 // v81: HTML and body text indents now inherit into descendant blocks.
 // v82: Scalable headings and blocks serialize point size and line height.
 // v83: Nested blocks inherit bold and italic styles, changing glyphs and wrapping.
-constexpr uint8_t SECTION_FILE_VERSION = 83;
+// v92: Footnotes are listed on the page that shows their link, not the page before it, when
+//      hyphenation splits words ahead of the link. Skips 84-91 (and partial 0xC5-0xCC), which
+//      upstream 2.0 development builds used for other layouts.
+constexpr uint8_t SECTION_FILE_VERSION = 92;
 // Suspended incremental build: valid pages plus LUTs and a parse-watermark trailer.
 // Change this with layout or payload changes so stale partial pages cannot resume
 // under a different layout contract.
-constexpr uint8_t SECTION_FILE_PARTIAL_VERSION = 0xC4;
+constexpr uint8_t SECTION_FILE_PARTIAL_VERSION = 0xCD;
 constexpr uint32_t HEADER_SIZE =
     sizeof(SECTION_CACHE_MAGIC) + sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(bool) +
     sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) + sizeof(uint8_t) +
