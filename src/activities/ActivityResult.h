@@ -146,11 +146,19 @@ struct ClippingJumpResult {
   bool settingsChanged = false;
 };
 
-using ResultVariant = std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult,
-                                   IntervalResult, OptionSelectionResult, PageResult, NetworkModeResult, FootnoteResult,
-                                   BookmarkResult, FileBrowserActionResult, FilePathResult, WordResult,
-                                   ReadingStatsResult, ProgressSyncResult, ClippingResult, TtfRenderOptionsResult,
-                                   DictionaryClippingRequest, ClippingJumpResult, FrontlightPanelResult>;
+// A search hit chosen from the in-book search results: a layout-independent
+// visible-text offset inside one spine item (see BookTextSearch.h).
+struct BookSearchJumpResult {
+  uint16_t spineIndex = 0;
+  uint32_t visibleTextOffset = 0;
+};
+
+using ResultVariant =
+    std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult, IntervalResult,
+                 OptionSelectionResult, PageResult, NetworkModeResult, FootnoteResult, BookmarkResult,
+                 FileBrowserActionResult, FilePathResult, WordResult, ReadingStatsResult, ProgressSyncResult,
+                 ClippingResult, TtfRenderOptionsResult, DictionaryClippingRequest, ClippingJumpResult,
+                 FrontlightPanelResult, BookSearchJumpResult>;
 
 struct ActivityResult {
   bool isCancelled = false;

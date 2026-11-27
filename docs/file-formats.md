@@ -1449,6 +1449,16 @@ when the book cache is cleared. The section header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
 
+A footnote preview is stored beside its spine's section as
+`<spine><mode suffix>_fn2_<anchor hash>.bin`, in the same format. It holds the
+pages laid out from the note's anchor to the end of the spine item, and is
+built incrementally like a chapter, so it may be a suspended partial. Its
+watermark trailer counts bytes from where the preview started rather than from
+the top of the spine item, so the page-count estimate covers only the input
+that produces preview pages. Older `_fn_` files held previews capped at three
+pages and are no longer read; they are removed with the rest of the book's
+section cache.
+
 Version 59 adds a compact page-start visible-text-offset lookup table. The
 offset is a Unicode codepoint coordinate in the spine XHTML, so reader progress
 and KOReader sync can return to the same content after a font, orientation, or

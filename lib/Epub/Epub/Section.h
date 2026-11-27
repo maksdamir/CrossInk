@@ -91,6 +91,13 @@ class Section {
   uint32_t partialBytesConsumed_ = 0;
   uint32_t partialTotalBytes_ = 0;
   std::string activeBuildTmpSectionPath_;
+  // Set for a footnote preview section (see setPreview()).
+  std::string previewAnchor_;
+  uint16_t previewMaxPages_ = 0;
+
+  // Applies this section's preview anchor to a build request, so no build path can lay out
+  // the whole spine into a preview cache file.
+  SectionBuildOptions withPreviewOptions(SectionBuildOptions options) const;
 
   uint32_t baseLayoutSignature_ = 0;
   bool publisherFontsEnabled_ = false;
@@ -125,13 +132,21 @@ class Section {
                    const char* cacheSuffix = "");
   explicit Section(Epub& epub, int spineIndex, GfxRenderer& renderer, const char* cacheSuffix = "");
   ~Section();
+  // Marks this section as a footnote preview: its cache holds only the pages laid out from
+  // `anchor` on. Every later build of it uses that anchor, whatever options the caller
+  // passes, including resumed partial builds and catch-up after a page turn. Call it right
+  // after construction, before loading or building.
+  void setPreview(const std::string& anchor, uint16_t maxPages);
   bool loadSectionFile(const ReaderRenderSpec& spec);
   bool clearCache() const;
+  // Where a build keeps the spine item's XHTML, inflated byte for byte from the EPUB. The file
+  // is renamed into place only once complete, so if it exists it holds the whole chapter.
+  static std::string cachedHtmlPath(const Epub& epub, int spineIndex);
   bool createSectionFile(const ReaderRenderSpec& spec, const std::function<void()>& popupFn = nullptr,
                          bool* imagesWereSuppressed = nullptr, bool* layoutAbortedForLowMemory = nullptr,
-                         SectionBuildOptions buildOptions = {});
+                         SectionBuildOptions requestedOptions = {});
 
-  bool startBuild(const ReaderRenderSpec& spec, SectionBuildOptions buildOptions = {},
+  bool startBuild(const ReaderRenderSpec& spec, SectionBuildOptions requestedOptions = {},
                   const std::function<void()>& popupFn = nullptr);
   bool buildSomeMore(int maxPages);
   // One slice of the build's deferred font advance prewarm; false when none is left.

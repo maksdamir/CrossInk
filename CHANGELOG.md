@@ -1,3 +1,15 @@
+## [Unreleased]
+
+### Added
+
+- Search the text of the open EPUB from the reader menu's More tab with **Search in Book**. Matches ignore case and accents, list their chapter and surrounding text as they are found, and open on the page that contains them. Results stay available until the book is closed.
+- Return from a search match to where you were reading with **Back** or the new **Go Back** item in the reader menu's More tab, which also returns from followed in-book links and shows the chapter it leads back to.
+
+### Changed
+
+- Footnote previews are no longer limited to three pages: keep turning pages to read a long note to its end and continue through the notes that follow it. Previews now lay out a few pages ahead of you as you read, so a note opens without first indexing pages you may never reach.
+- Footnote previews show the status bar's page count, counting from the note to the end of the notes that follow it, so you can see how much is left. It is marked `~` while it is an estimate.
+
 ## [v2.0.0] - 2026-11-24
 
 ### Added

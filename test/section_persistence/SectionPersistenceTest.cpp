@@ -133,6 +133,17 @@ TEST_F(SectionPersistenceTest, IsolatesChapterBucketsAndIgnoresLegacyFlatCaches)
   EXPECT_FALSE(first.hasHtmlCache());
 }
 
+TEST_F(SectionPersistenceTest, CachedHtmlPathIsWhereBuildsKeepTheChapter) {
+  // In-book search reads chapters from this path; a mismatch would silently
+  // send every chapter back through the zip inflater.
+  SectionHarness harness;
+  Section section(harness.epub, 32, harness.renderer);
+  EXPECT_EQ(Section::cachedHtmlPath(harness.epub, 32), "/cache/content/1/32.html");
+  EXPECT_FALSE(section.hasHtmlCache());
+  Storage.put(Section::cachedHtmlPath(harness.epub, 32), {1});
+  EXPECT_TRUE(section.hasHtmlCache());
+}
+
 TEST_F(SectionPersistenceTest, FullCommitReopensAndResolvesMetadataAcrossAChunkBoundary) {
   SectionHarness harness;
   harness.begin({{"chapter", 0}, {"boundary", 64}});

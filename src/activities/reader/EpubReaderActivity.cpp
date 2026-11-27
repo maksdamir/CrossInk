@@ -55,6 +55,7 @@
 #include "EpubReaderFootnoteSelectActivity.h"
 #include "EpubReaderFootnotesActivity.h"
 #include "EpubReaderPercentSelectionActivity.h"
+#include "EpubReaderSearchActivity.h"
 #include "EpubReaderUtils.h"
 #include "GlobalActions.h"
 #include "HyphenationPackStore.h"
@@ -84,6 +85,7 @@
 #include "activities/settings/StatusBarSettingsActivity.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
+#include "activities/util/KeyboardEntryActivity.h"
 #include "clippings/ClippingHighlightGeometry.h"
 #include "clippings/ClippingMatchTracker.h"
 #include "clippings/ClippingTextMatcher.h"
@@ -148,7 +150,10 @@ constexpr uint32_t IDLE_SD_FONT_PREWARM_MIN_FREE = 64U * 1024U;
 constexpr uint32_t IDLE_SD_FONT_PREWARM_MIN_MAX_ALLOC = 40U * 1024U;
 constexpr unsigned long MIN_READING_STATS_PAGE_MS = 2000UL;
 constexpr uint32_t MIN_READING_PACE_SAMPLE_SECONDS = 2;
-constexpr uint16_t FOOTNOTE_PREVIEW_MAX_PAGES = 3;
+// A preview has no practical page limit: it is laid out incrementally, a few pages ahead of
+// the reader, and ends where the note's spine item does. It must stay non-zero, which is
+// what marks a build as a preview (SectionBuildOptions::isPreview).
+constexpr uint16_t FOOTNOTE_PREVIEW_MAX_PAGES = std::numeric_limits<uint16_t>::max();
 #if CROSSINK_APP_CAP_TOUCH
 constexpr int TOUCH_FOOTNOTE_TARGET_SIZE = 48;
 #endif
@@ -2878,6 +2883,13 @@ void EpubReaderActivity::openReaderMenu() {
       },
       this);
 #endif
+  {
+    // Reads the chapter title from the book's metadata cache; serialize SD access
+    // with the render task like the metadata reads above.
+    RenderLock lock(*this);
+    const int depth = footnoteDepth.load(std::memory_order_relaxed);
+    menuActivity->setGoBackSpine(depth > 0 ? savedPositions[depth - 1].spineIndex : -1);
+  }
   startActivityForResult(std::move(menuActivity), [this](const ActivityResult& result) {
 #if !CROSSINK_APP_CAP_TOUCH
     const auto heapAfterMenu = MemoryBudget::snapshot();
@@ -3536,6 +3548,14 @@ void EpubReaderActivity::loop() {
             LOG_ERR("ERS", "Background section build suspended for low heap; not retrying for this section");
             return;
           }
+          // A reset preview would reload as its full chapter, so go back to the note's origin,
+          // dropping page turns queued for the preview as restoreSavedPosition() does.
+          if (activeFootnotePreview) {
+            clearPendingManualPageTurns(false);
+            if (returnFromFailedFootnotePreview()) {
+              return;
+            }
+          }
           section.reset();
           requestUpdate();
           return;
@@ -4090,6 +4110,157 @@ void EpubReaderActivity::handleClippingJump(const ClippingJumpResult& clipping) 
   pauseReadingPaceTimer("clipping_jump");
 }
 
+void EpubReaderActivity::openBookSearch(const bool returnToReaderMenu) {
+  if (!bookSearch) {
+    // Small bookkeeping object; the results buffer is allocated by start().
+    bookSearch = makeUniqueNoThrow<BookSearchSession>();
+    if (!bookSearch) {
+      LOG_ERR("SRCH", "Could not allocate the search session");
+      drawToast(renderer, tr(STR_SEARCH_OUT_OF_MEMORY));
+      delay(1000);
+      requestUpdate();
+      return;
+    }
+  }
+  if (bookSearch->hasQuery()) {
+    const booksearch::ScanOptions options = BookSearchSession::optionsFromSettings();
+    if (bookSearch->options() != options) {
+      // Images or publisher styles changed since the search ran, so its offsets
+      // no longer match this layout. Run the same query again rather than jump
+      // to the wrong pages.
+      LOG_INF("SRCH", "Layout settings changed since the last search; searching again");
+      const std::string query = bookSearch->queryText();
+      RenderLock lock(*this);
+      bookSearch->start(query, epub->getSpineItemsCount(), options);
+    }
+    showBookSearchResults();
+    return;
+  }
+  promptBookSearchQuery(returnToReaderMenu);
+}
+
+void EpubReaderActivity::promptBookSearchQuery(const bool returnToReaderMenu) {
+  pauseReadingPaceTimer("book_search");
+  auto keyboard =
+      makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_SEARCH_IN_BOOK), bookSearch->queryText(),
+                                               booksearch::MAX_QUERY_BYTES, InputType::Text);
+  if (!keyboard) {
+    LOG_ERR("SRCH", "Could not allocate the search keyboard");
+    resumeReadingPaceTimer("book_search_alloc_failed");
+    requestUpdate();
+    return;
+  }
+  startActivityForResult(std::move(keyboard), [this, returnToReaderMenu](const ActivityResult& result) {
+    const auto* text = std::get_if<KeyboardResult>(&result.data);
+    bool started = false;
+    if (!result.isCancelled && text) {
+      RenderLock lock(*this);
+      started = bookSearch->start(text->text, epub->getSpineItemsCount(), BookSearchSession::optionsFromSettings());
+    }
+    if (started) {
+      showBookSearchResults();
+      return;
+    }
+    resumeReadingPaceTimer("book_search_cancelled");
+    if (bookSearch->outOfMemory()) {
+      drawToast(renderer, tr(STR_SEARCH_OUT_OF_MEMORY));
+      delay(1000);
+    }
+    if (returnToReaderMenu && result.isCancelled) {
+      openReaderMenu();
+    } else {
+      requestUpdate();
+    }
+  });
+}
+
+void EpubReaderActivity::showBookSearchResults() {
+  pauseReadingPaceTimer("book_search");
+  auto results = makeUniqueNoThrow<EpubReaderSearchActivity>(renderer, mappedInput, epub, *bookSearch);
+  if (!results) {
+    LOG_ERR("SRCH", "Could not allocate the search results screen");
+    resumeReadingPaceTimer("book_search_alloc_failed");
+    drawToast(renderer, tr(STR_SEARCH_OUT_OF_MEMORY));
+    delay(1000);
+    requestUpdate();
+    return;
+  }
+  startActivityForResult(std::move(results), [this](const ActivityResult& result) {
+    if (const auto* hit = std::get_if<BookSearchJumpResult>(&result.data); hit && !result.isCancelled) {
+      jumpToSearchResult(*hit);
+    } else {
+      resumeReadingPaceTimer("book_search_closed");
+    }
+    requestUpdate();
+  });
+}
+
+void EpubReaderActivity::jumpToSearchResult(const BookSearchJumpResult& hit) {
+  if (static_cast<int>(hit.spineIndex) >= epub->getSpineItemsCount()) {
+    LOG_ERR("SRCH", "Search hit spine %u is out of range", static_cast<unsigned>(hit.spineIndex));
+    resumeReadingPaceTimer("book_search_bad_hit");
+    return;
+  }
+  LOG_DBG("SRCH", "Jumping to spine %u visible offset %lu", static_cast<unsigned>(hit.spineIndex),
+          static_cast<unsigned long>(hit.visibleTextOffset));
+  clearPendingManualPageTurns();
+  RenderLock lock(*this);
+  // Record where to return to, on the same stack in-book links use, so Back and
+  // Go Back lead back to the reading position. A footnote preview already
+  // pushed its origin, and a hop from one match's page to another match keeps
+  // the position the first jump recorded.
+  int depth = footnoteDepth.load(std::memory_order_relaxed);
+  if (!activeFootnotePreview && !isOnLastSearchLanding()) {
+    EpubLinkReturnState::push(savedPositions, depth,
+                              {currentSpineIndex, section ? section->currentPage : nextPageNumber});
+    footnoteDepth.store(depth, std::memory_order_relaxed);
+    LOG_DBG("SRCH", "Recorded return position spine %d page %d (depth %d)", savedPositions[depth - 1].spineIndex,
+            savedPositions[depth - 1].pageNumber, depth);
+  } else {
+    LOG_DBG("SRCH", "Hop between matches; keeping return position (depth %d)", depth);
+  }
+  clearFootnotePreviewState();
+  currentSpineIndex = hit.spineIndex;
+  lastSearchLanding = {true, depth, hit.spineIndex, hit.visibleTextOffset};
+  // Reuse the saved-progress restore path: once the section is loaded (or
+  // built far enough), applyDeferredReposition() turns the visible-text offset
+  // into a page, so cached and never-opened chapters land the same way.
+  cachedSpineIndex = hit.spineIndex;
+  cachedVisibleTextOffset = hit.visibleTextOffset;
+  cachedChapterPageNumber = 0;
+  cachedChapterTotalPageCount = 0;
+  cachedPageParagraphIndex = UINT16_MAX;
+  cachedPageParagraphOffset = 0;
+  cachedPageParagraphSpan = 0;
+  pendingRelayoutReposition = true;
+  pendingAnchor.clear();
+  pendingPageJump.reset();
+  pendingParagraphIndex = UINT16_MAX;
+  pendingClippingIndex = UINT16_MAX;
+  pendingPercentJump = false;
+  nextPageNumber = 0;
+  section.reset();
+  armReadingPaceWarmup("search_jump");
+  pauseReadingPaceTimer("search_jump");
+}
+
+bool EpubReaderActivity::isOnLastSearchLanding() const {
+  if (!lastSearchLanding.valid || footnoteDepth.load(std::memory_order_relaxed) != lastSearchLanding.returnDepth ||
+      !section || activeFootnotePreview || currentSpineIndex != lastSearchLanding.spineIndex) {
+    return false;
+  }
+  const int page = section->currentPage;
+  if (page < 0 || page >= static_cast<int>(section->pageCount)) return false;
+  // The landing page is the one whose text range holds the hit's offset, the
+  // same rule getPageForVisibleTextOffset() used to choose it.
+  const uint32_t target = lastSearchLanding.visibleTextOffset;
+  const auto start = section->getVisibleTextOffsetForPage(static_cast<uint16_t>(page));
+  if (!start || *start > target) return false;
+  if (*start == target || page + 1 >= static_cast<int>(section->pageCount)) return true;
+  const auto next = section->getVisibleTextOffsetForPage(static_cast<uint16_t>(page + 1));
+  return !next || *next > target;
+}
+
 #if CROSSINK_APP_CAP_TOUCH
 bool EpubReaderActivity::handlePinchFontResize() {
   if (!SETTINGS.pinchFontResizeEnabled || !mappedInput.supportsMultiTouch()) {
@@ -4327,6 +4498,15 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuAction action, const 
           requestUpdate();
         }
       });
+      break;
+    }
+    case EpubReaderMenuAction::SEARCH_IN_BOOK: {
+      openBookSearch(returnToReaderMenu);
+      break;
+    }
+    case EpubReaderMenuAction::GO_BACK: {
+      // Same as Back on a page with history: pop the link-return stack.
+      restoreSavedPosition();
       break;
     }
     case EpubReaderMenuAction::FOOTNOTES: {
@@ -6542,7 +6722,10 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn, const char* source) {
   pageLoadRetryCount = 0;
   if (activeFootnotePreview) {
     if (isForwardTurn) {
-      if (section && section->currentPage < section->pageCount - 1) {
+      // While the preview is still being laid out (or a saved partial can resume), the
+      // next page may not exist yet: render() builds it on demand, and clamps to the last
+      // page once the note's spine item ends.
+      if (section && (section->currentPage < section->pageCount - 1 || section->isBuilding() || section->isPartial())) {
         section->currentPage++;
       }
     } else {
@@ -6810,6 +6993,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
                 fontId, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
         return false;
       }
+      if (buildingFootnotePreview) {
+        section->setPreview(pendingFootnotePreviewAnchor, FOOTNOTE_PREVIEW_MAX_PAGES);
+      }
       const ReaderRenderSpec spec =
           readerRenderSpecForProfile(fontId, viewportWidth, viewportHeight, buildProfileForRenderMode(renderMode));
       if (!section->loadSectionFile(spec)) {
@@ -6885,6 +7071,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
             layoutAbortedForLowMemory = true;
             return false;
           }
+          if (buildingFootnotePreview) {
+            section->setPreview(pendingFootnotePreviewAnchor, FOOTNOTE_PREVIEW_MAX_PAGES);
+          }
         }
 
         bool attemptLayoutAbortedForLowMemory = false;
@@ -6902,7 +7091,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
           buildOptions.resolvedReferencePage = &resolvedReferencePage;
         }
         const ReaderRenderSpec spec = readerRenderSpecForProfile(fontId, viewportWidth, viewportHeight, profile);
-        const bool needsFullBuild = fullSectionIndexing || buildingFootnotePreview || pendingPercentJump ||
+        // A footnote preview always builds incrementally, even with full-section indexing:
+        // it runs to the end of its spine item, which can be a long notes file, so it is laid
+        // out a few pages ahead of the reader instead of all before the first page shows.
+        const bool needsFullBuild = (fullSectionIndexing && !buildingFootnotePreview) || pendingPercentJump ||
                                     pendingClippingIndex != UINT16_MAX || pendingParagraphIndex != UINT16_MAX;
         bool buildSucceeded = false;
         if (needsFullBuild) {
@@ -7094,26 +7286,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         if (!layoutAbortedForLowMemory) {
           LOG_ERR("ERS", "Failed to persist page data to SD");
         }
-        const bool shouldRestoreFootnoteOrigin = buildingFootnotePreview && footnoteDepth > 0;
-        section.reset();
-        if (buildingFootnotePreview) {
-          pendingFootnotePreviewAnchor.clear();
-          activeFootnotePreview = false;
-        }
-        if (shouldRestoreFootnoteOrigin) {
-          const int depth = footnoteDepth.load(std::memory_order_relaxed) - 1;
-          const SavedPosition& origin = savedPositions[depth];
-          footnoteDepth.store(depth, std::memory_order_relaxed);
-          LOG_ERR("ERS", "Footnote preview build failed; restoring origin spine %d page %d", origin.spineIndex,
-                  origin.pageNumber);
-          pendingAnchor.clear();
-          pendingPageJump.reset();
-          currentSpineIndex = origin.spineIndex;
-          nextPageNumber = origin.pageNumber;
-          armReadingPaceWarmup("footnote_preview_failed_restore");
-          requestUpdate();
+        if (buildingFootnotePreview && returnFromFailedFootnotePreview()) {
           return;
         }
+        section.reset();
         if (layoutAbortedForLowMemory) {
           showLowMemoryLayoutError();
         } else {
@@ -7253,10 +7429,12 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   // Extend the build to the requested page if needed. This covers a partial cache that is
   // already loaded but not actively building; pages already available do no work here.
   const int requestedPageBeforeCatchUp = section->currentPage;
-  if (!activeFootnotePreview && partialRebuildAbortedForLowMemory && section->pageCount > 0 &&
+  // A preview stops at its last readable page here too, but never silent-restarts: the
+  // restart reopens the book at its saved reading position, which a preview does not have.
+  if (partialRebuildAbortedForLowMemory && section->pageCount > 0 &&
       section->currentPage >= static_cast<int>(section->pageCount)) {
     const bool shouldSilentRestartForPartialLowMemory =
-        !lowMemoryPartialRestartAttempted && section->lastBuildLayoutAbortedForLowMemory() &&
+        !activeFootnotePreview && !lowMemoryPartialRestartAttempted && section->lastBuildLayoutAbortedForLowMemory() &&
         section->currentPage == static_cast<int>(section->pageCount) &&
         section->pageCount < std::numeric_limits<uint16_t>::max() && currentSpineIndex >= 0 &&
         currentSpineIndex <= std::numeric_limits<uint16_t>::max();
@@ -7272,16 +7450,18 @@ void EpubReaderActivity::render(RenderLock&& lock) {
             section->currentPage, section->pageCount);
     section->currentPage = section->pageCount - 1;
   }
-  if (!activeFootnotePreview && section->isPartial() && section->currentPage >= static_cast<int>(section->pageCount)) {
+  // A footnote preview resumes like a chapter: its Section re-applies the preview anchor to
+  // every build (Section::setPreview), so extending a saved partial preview lays out the
+  // note again rather than the whole spine item.
+  if (section->isPartial() && section->currentPage >= static_cast<int>(section->pageCount)) {
     showIndexingPopup();
   }
-  const bool needsBlockingCatchUp = section->currentPage >= static_cast<int>(section->pageCount) &&
-                                    ((!activeFootnotePreview && section->isPartial()) || section->isBuilding());
+  const bool needsBlockingCatchUp =
+      section->currentPage >= static_cast<int>(section->pageCount) && (section->isPartial() || section->isBuilding());
   bool catchUpCancelled = false;
   bool catchUpFailed = false;
   const auto runBlockingCatchUp = [&]() {
-    while (!activeFootnotePreview && section->isPartial() &&
-           section->currentPage >= static_cast<int>(section->pageCount)) {
+    while (section->isPartial() && section->currentPage >= static_cast<int>(section->pageCount)) {
       if (!section->isBuilding()) {
         const int renderFontId = activeSectionFontId != 0 ? activeSectionFontId : SETTINGS.getReaderFontId();
         const SectionBuildProfile profile = buildProfileForRenderMode(normalizeRenderMode(SETTINGS.epubRenderMode));
@@ -7335,7 +7515,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     if (section->lastBuildLayoutAbortedForLowMemory() && section->pageCount > 0) {
       partialRebuildAbortedForLowMemory = true;
       const int partialWatermark = static_cast<int>(section->pageCount);
-      if (requestedPageBeforeCatchUp == partialWatermark &&
+      if (!activeFootnotePreview && requestedPageBeforeCatchUp == partialWatermark &&
           restartForLowMemoryLayout(partialWatermark, partialWatermark - 1, section->estimatedTotalPages(),
                                     "partial EPUB catch-up")) {
         return;
@@ -7344,6 +7524,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       LOG_ERR("ERS", "Blocking build stopped for low heap; retaining %u readable partial pages", section->pageCount);
       queueLowMemoryLayoutAlert(false);
     } else {
+      if (activeFootnotePreview && returnFromFailedFootnotePreview()) {
+        return;
+      }
       section.reset();
       showBuildError();
       return;
@@ -7820,9 +8003,11 @@ bool EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageC
       currentPage < section->pageCount) {
     visibleTextOffset = section->getVisibleTextOffsetForPage(static_cast<uint16_t>(currentPage));
   }
-  if (section && section->isBuilding() && spineIndex == currentSpineIndex) {
+  if (section && section->isBuilding()) {
     // Free lazy-build cache files before opening progress.bin; X4/SdFat can reject
-    // another file open while a still-building EPUB section keeps files open.
+    // another file open while a still-building EPUB section keeps files open. This
+    // includes a footnote preview's build while the reading origin, usually in another
+    // spine, is saved. The build reopens its files on its next chunk.
     section->releaseBuildFile();
   }
   const bool saved = EpubReaderUtils::saveProgress(*epub, spineIndex, currentPage, pageCount, visibleTextOffset);
@@ -8665,6 +8850,9 @@ void EpubReaderActivity::renderStatusBar() const {
                                 : nullptr;
   content.bookmarked = bookmarked;
   content.showProgress = !activeFootnotePreview;
+  // A preview's page count runs from the note to the end of its spine item (the notes that
+  // follow it), estimated with "~" until the preview is fully laid out.
+  content.showPageCount = true;
   content.pageCountEstimated = pageCountEstimated;
   content.darkMode = ReaderUtils::readerDarkModeEnabled();
 #if !CROSSINK_APP_CAP_TOUCH
@@ -8865,7 +9053,10 @@ std::string EpubReaderActivity::footnotePreviewCacheSuffix(const EpubRenderMode 
                                                            const std::string& anchor) const {
   const uint64_t anchorHash = hashFootnotePreviewAnchor(anchor);
   char previewSuffix[32];
-  snprintf(previewSuffix, sizeof(previewSuffix), "_fn_%08lx%08lx", static_cast<unsigned long>(anchorHash >> 32),
+  // "_fn2_": previews built before they ran to the end of their spine item were capped at
+  // three pages and saved under "_fn_" as complete. A new name rebuilds them instead of
+  // reopening them truncated; the old files go when the book's section cache is cleared.
+  snprintf(previewSuffix, sizeof(previewSuffix), "_fn2_%08lx%08lx", static_cast<unsigned long>(anchorHash >> 32),
            static_cast<unsigned long>(anchorHash & 0xffffffffULL));
   return std::string(sectionCacheSuffixForRenderMode(renderMode)) + previewSuffix;
 }
@@ -8873,6 +9064,24 @@ std::string EpubReaderActivity::footnotePreviewCacheSuffix(const EpubRenderMode 
 void EpubReaderActivity::clearFootnotePreviewState() {
   pendingFootnotePreviewAnchor.clear();
   activeFootnotePreview = false;
+}
+
+bool EpubReaderActivity::returnFromFailedFootnotePreview() {
+  section.reset();
+  clearFootnotePreviewState();
+  const int depth = footnoteDepth.load(std::memory_order_relaxed);
+  if (depth <= 0) return false;
+  footnoteDepth.store(depth - 1, std::memory_order_relaxed);
+  const SavedPosition& origin = savedPositions[depth - 1];
+  LOG_ERR("ERS", "Footnote preview build failed; restoring origin spine %d page %d", origin.spineIndex,
+          origin.pageNumber);
+  pendingAnchor.clear();
+  pendingPageJump.reset();
+  currentSpineIndex = origin.spineIndex;
+  nextPageNumber = origin.pageNumber;
+  armReadingPaceWarmup("footnote_preview_failed_restore");
+  requestUpdate();
+  return true;
 }
 
 void EpubReaderActivity::navigateToHref(const std::string& hrefStr, const bool savePosition,
@@ -8958,6 +9167,16 @@ bool EpubReaderActivity::restoreSavedPosition(const int deferredDepth) {
     footnoteDepth.store(depth - 1, std::memory_order_relaxed);
     clearFootnotePreviewState();
     pendingAnchor.clear();
+    // An explicit return supersedes any reposition still pending from the jump
+    // that left this position (Back pressed while that jump was indexing):
+    // otherwise a same-chapter jump would re-apply its target after the restore.
+    cachedVisibleTextOffset.reset();
+    pendingRelayoutReposition = false;
+    cachedChapterPageNumber = 0;
+    cachedChapterTotalPageCount = 0;
+    cachedPageParagraphIndex = UINT16_MAX;
+    cachedPageParagraphOffset = 0;
+    cachedPageParagraphSpan = 0;
     currentSpineIndex = pos.spineIndex;
     nextPageNumber = pos.pageNumber;
     section.reset();

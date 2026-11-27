@@ -261,6 +261,41 @@ If the estimate was thrown off by unusual reading (for example, skimming), use
 **Reset Reading Pace** in the EPUB Reader Menu's **Settings** tab to start
 learning again from fresh page turns.
 
+## Search In Book
+
+Open the reader menu's **More** tab and select **Search in Book**, then type a
+word or phrase. CrossInk scans the whole EPUB chapter by chapter, including
+chapters you have not opened yet, and lists each match with its surrounding
+text and chapter as it is found. Select a match to open the page that contains
+it.
+
+- Matching ignores letter case and accents (`cafe` finds "Café"), treats typographic
+  quotes and dashes like the ones on the keyboard, and matches across line and
+  paragraph breaks. Image descriptions shown in place of pictures (for example
+  with **Images** set to show placeholders) are searchable too.
+- After jumping to a match, press **Back** (X3, X4, X4 Classic) or choose
+  **Go Back** in the reader menu's **More** tab to return to where you were
+  reading. On the X4 Pro and other touch devices, **Go Back** is the way back
+  unless a shortcut is assigned to **Footnotes** (see
+  [Controls](./controls.md)). Moving between matches keeps that position: jump
+  to one match, then another, and going back still returns to your reading
+  page. If you read on from a match and then jump again, the page you left
+  becomes the new return point.
+- On the results screen, press **Back** or tap the back arrow at any time to
+  return to your page. Opening **Search in Book**
+  again while the book is open shows the same results, and continues an
+  unfinished search where it stopped. Choose **New Search** at the top of the list
+  to search for something else.
+- The X3 and X4 keep the first 50 matches; every other device has PSRAM and
+  keeps the first 200.
+- If you change **Images** or publisher styles after searching, opening
+  **Search in Book** runs the search again so its matches line up with the new
+  layout.
+- Search covers EPUB books. It reads each chapter's text without applying the
+  book's stylesheet, so with publisher styles on, text a book hides through its
+  stylesheet can still be found, and later matches in that chapter may open a
+  page late.
+
 ## Bookmarks
 
 CrossInk supports EPUB bookmarks from the reader.

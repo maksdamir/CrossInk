@@ -20,6 +20,7 @@
 #include "BookLoadingFeedback.h"
 #include "BookPageEstimate.h"
 #include "BookReadingStats.h"
+#include "BookSearchSession.h"
 #include "BookmarkStore.h"
 #include "DailyReadingStats.h"
 #include "DeferredGrayscale.h"
@@ -151,6 +152,13 @@ class EpubReaderActivity final : public Activity {
   int nextPageNumber = 0;
   int activeSectionFontId = 0;
   std::optional<uint16_t> pendingPageJump;
+  std::unique_ptr<BookSearchSession> bookSearch;
+  struct SearchLanding {
+    bool valid = false;
+    int returnDepth = 0;  // footnoteDepth right after the jump
+    uint16_t spineIndex = 0;
+    uint32_t visibleTextOffset = 0;
+  } lastSearchLanding;
   // Set when navigating to a footnote href with a fragment (e.g. #note1).
   // Cleared on the next render after the new section loads and resolves it to a page.
   std::string pendingAnchor;
@@ -432,6 +440,11 @@ class EpubReaderActivity final : public Activity {
   bool shouldUseFootnotePreview(int targetSpineIndex, const std::string& anchor) const;
   std::string footnotePreviewCacheSuffix(EpubRenderMode renderMode, const std::string& anchor) const;
   void clearFootnotePreviewState();
+  // Drops a footnote preview whose layout failed and, when the link history has an
+  // origin, returns to it. Returns false when there was no origin to return to. The caller
+  // must already hold RenderLock (render() or a locked loop() path): unlike
+  // restoreSavedPosition() it does not take the lock itself.
+  bool returnFromFailedFootnotePreview();
   void silentIndexNextChapterIfNeeded(uint16_t viewportWidth, uint16_t viewportHeight);
   void cancelSilentPrefetchForInput();
   bool restoreCurrentPageBufferAfterSilentIndex();
@@ -545,6 +558,16 @@ class EpubReaderActivity final : public Activity {
   bool executeShortPowerButtonAction();
   bool executeLongPowerButtonAction();
   void handleClippingJump(const ClippingJumpResult& clipping);
+  // In-book search: the session keeps the query, results and scan position
+  // until the book closes. Allocated on first use (results buffer included).
+  void openBookSearch(bool returnToReaderMenu);
+  void promptBookSearchQuery(bool returnToReaderMenu);
+  void showBookSearchResults();
+  void jumpToSearchResult(const BookSearchJumpResult& hit);
+  // True while the reader still shows the page the last search jump landed on,
+  // with the return stack untouched since. Another jump from there is a hop
+  // between matches and must not bury the original reading position.
+  bool isOnLastSearchLanding() const;
   bool handleTouchDictionaryLookup();
   void openWordSelect(bool framebufferContainsPage, int initialTouchX = -1, int initialTouchY = -1,
                       bool autoLookupInitialWord = false);

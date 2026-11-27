@@ -170,6 +170,23 @@ Section::Section(Epub& epub, const int spineIndex, GfxRenderer& renderer, const 
 // (no-op once a build has completed or never started).
 Section::~Section() { suspendBuild(); }
 
+std::string Section::cachedHtmlPath(const Epub& epub, const int spineIndex) {
+  return chapterDirectory(epub, "/content", spineIndex) + "/" + std::to_string(spineIndex) + ".html";
+}
+
+void Section::setPreview(const std::string& anchor, const uint16_t maxPages) {
+  previewAnchor_ = anchor;
+  previewMaxPages_ = maxPages;
+}
+
+SectionBuildOptions Section::withPreviewOptions(SectionBuildOptions options) const {
+  if (!previewAnchor_.empty() && previewMaxPages_ > 0) {
+    options.previewAnchor = previewAnchor_.c_str();
+    options.previewMaxPages = previewMaxPages_;
+  }
+  return options;
+}
+
 uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
   if (publisherFontsEnabled_) {
     publisherFontFaces_ = renderer.bookFontUsage();
@@ -524,7 +541,8 @@ bool Section::clearCache() const {
 
 bool Section::createSectionFile(const ReaderRenderSpec& spec, const std::function<void()>& popupFn,
                                 bool* imagesWereSuppressed, bool* layoutAbortedForLowMemory,
-                                const SectionBuildOptions buildOptions) {
+                                const SectionBuildOptions requestedOptions) {
+  const SectionBuildOptions buildOptions = withPreviewOptions(requestedOptions);
   const int fontId = spec.fontId;
   const float lineCompression = spec.lineCompression;
   const bool extraParagraphSpacing = spec.extraParagraphSpacing;
@@ -890,8 +908,9 @@ bool Section::createSectionFile(const ReaderRenderSpec& spec, const std::functio
   return true;
 }
 
-bool Section::startBuild(const ReaderRenderSpec& spec, const SectionBuildOptions buildOptions,
+bool Section::startBuild(const ReaderRenderSpec& spec, const SectionBuildOptions requestedOptions,
                          const std::function<void()>& popupFn) {
+  const SectionBuildOptions buildOptions = withPreviewOptions(requestedOptions);
   const int fontId = spec.fontId;
   const float lineCompression = spec.lineCompression;
   const bool extraParagraphSpacing = spec.extraParagraphSpacing;
@@ -1115,7 +1134,7 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const SectionBuildOptions
     }
     return false;
   }
-  build_->totalBytes = build_->parser->parseTotalBytes();
+  build_->totalBytes = build_->parser->estimateTotalBytes();
   return true;
 }
 
@@ -1150,7 +1169,10 @@ bool Section::buildSomeMore(const int maxPages) {
     }
     // ParseStatus::More: yield once we've laid out the requested number of pages.
     if (maxPages > 0 && (builtPageCount_ - startCount) >= maxPages) {
-      build_->bytesConsumed = build_->parser->parseBytesConsumed();
+      // Refresh both: a footnote preview's total shrinks to the input from its anchor on
+      // once the anchor is found (ChapterHtmlSlimParser::estimateBytesConsumed()).
+      build_->bytesConsumed = build_->parser->estimateBytesConsumed();
+      build_->totalBytes = build_->parser->estimateTotalBytes();
       return true;
     }
   }
@@ -1449,14 +1471,17 @@ void Section::suspendBuild() {
     // Capture the parse watermark and commit before tearing the parser down (the anchor
     // map is read from it). The incomplete trailing page is intentionally not flushed:
     // only fully laid-out pages are persisted, and the rebuild re-derives the rest.
-    const uint32_t consumed = static_cast<uint32_t>(build_->parser->parseBytesConsumed());
-    committed = commitBuildFile(SECTION_FILE_PARTIAL_VERSION, consumed, build_->totalBytes);
+    // Read both from the parser: a suspend can land between yields, when build_->totalBytes
+    // may predate a footnote preview finding its anchor.
+    const uint32_t consumed = static_cast<uint32_t>(build_->parser->estimateBytesConsumed());
+    const uint32_t total = static_cast<uint32_t>(build_->parser->estimateTotalBytes());
+    committed = commitBuildFile(SECTION_FILE_PARTIAL_VERSION, consumed, total);
     if (committed) {
       partial_ = true;
       partialPageCount_ = builtPageCount_;
       partialProtectedImageUnits_ = protectedImageUnits_;
       partialBytesConsumed_ = consumed;
-      partialTotalBytes_ = build_->totalBytes;
+      partialTotalBytes_ = total;
       LOG_INF("SCT", "Suspended build: %u pages persisted", builtPageCount_);
     }
   }
