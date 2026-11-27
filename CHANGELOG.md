@@ -10,6 +10,10 @@
 - Footnote previews are no longer limited to three pages: keep turning pages to read a long note to its end and continue through the notes that follow it. Previews now lay out a few pages ahead of you as you read, so a note opens without first indexing pages you may never reach.
 - Footnote previews show the status bar's page count, counting from the note to the end of the notes that follow it, so you can see how much is left. It is marked `~` while it is an estimate.
 
+### Fixed
+
+- With hyphenation on, a footnote link near the top of a page could not be tapped and was missing from that page's footnote list, because the note was listed on the page before instead. Books re-index once when first opened after this update.
+
 ## [v2.0.0] - 2026-11-24
 
 ### Added

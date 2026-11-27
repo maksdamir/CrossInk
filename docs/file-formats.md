@@ -1181,7 +1181,18 @@ and at their exact dimensions; mismatches fall back to the source EPUB image.
 
 ## `section.bin`
 
-### Version 118 (current release)
+### Version 150
+
+Each page's footnote list holds the links that page shows. Earlier versions could
+list a link on the page before it when hyphenation or a long-word break split
+words earlier in the paragraph, which left the link untappable on its own page.
+The payload is unchanged from version 118. Complete sections use version 150 and
+suspended sections use `0x97`. This fork does not take the next numbers, 119
+and `0xE8`, because upstream development builds have already used up to 125 and
+`0xEE` for different layouts. Older full and partial caches, including 2.0.0's
+`118` and `0xE7`, rebuild automatically, as do footnote preview caches.
+
+### Version 118 (2.0.0 release)
 
 Complete sections use version 118 and partial sections use `0xE7`. Block-styled spans can affect pagination. In the optional per-word font-size byte, bits 0–5 store the point size, bit 6 marks a black background on the preceding space, and bit 7 hides the glyphs while retaining their layout width.
 

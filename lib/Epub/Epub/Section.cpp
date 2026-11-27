@@ -52,11 +52,15 @@ constexpr uint32_t SECTION_CACHE_MAGIC = 0x535843FF;  // bytes: 0xFF, "CXS"
 // v114: Lower ruled text by a pixel while preserving descender clearance.
 // v115: Center the main letter body between rules independently of descenders.
 // v118: Block spans affect pagination and word sizes carry inline paint flags.
-constexpr uint8_t SECTION_FILE_VERSION = 118;
+// v150 (fork): Footnotes are listed on the page that shows their link, not the page before it,
+//      when hyphenation splits words ahead of the link. Not the next number (119/0xE8): upstream
+//      development builds have already used up to 125/0xEE for other layouts.
+constexpr uint8_t SECTION_FILE_VERSION = 150;
 // Suspended incremental build: valid pages plus LUTs and a parse-watermark trailer.
 // Change this with layout or payload changes so stale partial pages cannot resume
 // under a different layout contract.
-constexpr uint8_t SECTION_FILE_PARTIAL_VERSION = 0xE7;
+// 0x97 (fork): never used upstream as a full or partial version; see v150 above.
+constexpr uint8_t SECTION_FILE_PARTIAL_VERSION = 0x97;
 constexpr uint32_t HEADER_SIZE =
     sizeof(bool) + 4 * sizeof(uint32_t) + sizeof(PublisherFonts) + sizeof(SECTION_CACHE_MAGIC) + sizeof(uint8_t) +
     sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(bool) + sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint16_t) +

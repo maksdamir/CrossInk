@@ -1202,12 +1202,16 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
 
   // flush the buffer
   partWordBuffer[partWordBufferIndex] = '\0';
+  const size_t wordsBefore = currentTextBlock->size();
   currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues,
                             honorsPublisherDecorations() && effectiveBackgroundBlack,
                             insideFootnoteLink ? currentFootnote.linkId : 0, partWordVisibleOffset,
                             partWordReferenceOffset, partWordInlinePadding, effectivePreserveWhitespace,
                             TextBlock::packWordSize(effectiveInlineFontSize, effectiveHidden, backgroundSpace),
                             effectiveFontFamily, !syntheticCharacterData, partWordSourceOffset, partWordSourceGaps);
+  if (insideFootnoteLink && currentTextBlock->size() > wordsBefore) {
+    currentFootnoteLinkHasWords = true;
+  }
   currentTextRunBytes = static_cast<uint16_t>(
       std::min<size_t>(currentTextRunBytes + static_cast<size_t>(partWordBufferIndex), UINT16_MAX));
   partWordBufferIndex = 0;
@@ -3276,6 +3280,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       self->currentFootnote.linkId = self->nextFootnoteLinkId;
       self->nextFootnoteLinkId = static_cast<uint8_t>((self->nextFootnoteLinkId % 63) + 1);
       self->currentFootnoteLinkTextLen = 0;
+      // Ids are reused every 63 links; drop what the previous link with this id recorded.
+      const uint64_t linkBit = footnoteLinkBit(self->currentFootnote.linkId);
+      self->footnoteLinksWithWords &= ~linkBit;
+      self->footnoteLinksShown &= ~linkBit;
+      self->currentFootnoteLinkHasWords = false;
 
       // Apply underline style to visually indicate the link
       self->underlineUntilDepth = std::min(self->underlineUntilDepth, self->depth);
@@ -4240,6 +4249,9 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
       entry.linkId = self->currentFootnote.linkId;
       int wordIndex =
           self->wordsExtractedInBlock + (self->currentTextBlock ? static_cast<int>(self->currentTextBlock->size()) : 0);
+      if (self->currentFootnoteLinkHasWords) {
+        self->footnoteLinksWithWords |= footnoteLinkBit(entry.linkId);
+      }
       self->pendingFootnotes.push_back({wordIndex, entry});
       if (self->pendingFootnotes.size() >= MAX_PENDING_FOOTNOTES_BEFORE_LAYOUT && self->tableDepth == 0) {
         if (self->partWordBufferIndex > 0) {
@@ -4970,6 +4982,41 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
   return finishParse();
 }
 
+// Drops pending footnotes whose links are fully laid out. addLineToPage() calls this for each
+// line after listing the line's links on the current page.
+//
+// A link whose text became words is dropped on the first line with words that comes after the
+// lines showing it; each page those lines landed on already lists it. A line of inline images
+// alone does not count, because an image inside a link carries no link id and more of the
+// link's text can follow it. The word index is not used for this: hyphenation and long-word
+// breaks insert words during layout, so the index runs ahead and would drop the link a line
+// early. When that line ended the previous page, the note was listed there and not on the page
+// showing the link, leaving the link untappable.
+//
+// A link without words of its own (nothing to show it) keeps the word-index rule and is listed
+// on the page where layout passes it.
+void ChapterHtmlSlimParser::retirePendingFootnotes(const uint64_t linksOnLine, const bool lineHasWords) {
+  auto kept = pendingFootnotes.begin();
+  for (auto it = pendingFootnotes.begin(); it != pendingFootnotes.end(); ++it) {
+    const uint64_t linkBit = footnoteLinkBit(it->second.linkId);
+    bool retire = false;
+    if ((footnoteLinksWithWords & linkBit) != 0) {
+      retire = lineHasWords && (footnoteLinksShown & linkBit) != 0 && (linksOnLine & linkBit) == 0;
+    } else if (it->first <= wordsExtractedInBlock) {
+      currentPage->addFootnote(it->second.number, it->second.href, it->second.linkId);
+      retire = true;
+    }
+    if (retire) {
+      footnoteLinksShown &= ~linkBit;
+      continue;
+    }
+    if (kept != it) *kept = std::move(*it);
+    ++kept;
+  }
+  pendingFootnotes.erase(kept, pendingFootnotes.end());
+  footnoteLinksShown |= linksOnLine;
+}
+
 void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const uint32_t visibleOffset,
                                           const uint32_t referenceOffset) {
   if (lowMemoryAbort || previewStopRequested) {
@@ -5016,6 +5063,7 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const
 
   // Keep a link available on every page where its text is visible. Usually this
   // adds one compact entry; a long wrapped link can span lines or pages.
+  uint64_t linksOnLine = 0;
   for (uint16_t wordIndex = 0; wordIndex < line->wordCount(); ++wordIndex) {
     const uint8_t linkId = line->wordLinkId(wordIndex);
     if (linkId == 0) continue;
@@ -5023,23 +5071,21 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const
     // word index. The active link already has the href and display label.
     if (insideFootnoteLink && linkId == currentFootnote.linkId) {
       currentPage->addFootnote(currentFootnote.number, currentFootnote.href, linkId);
+      // Count it as shown so it still retires after its last line when all of its lines are
+      // laid out before </a>, as a <br> inside the link or a run of inline images can do.
+      linksOnLine |= footnoteLinkBit(linkId);
       continue;
     }
     const auto entry = std::find_if(pendingFootnotes.begin(), pendingFootnotes.end(),
                                     [linkId](const auto& pending) { return pending.second.linkId == linkId; });
     if (entry != pendingFootnotes.end()) {
       currentPage->addFootnote(entry->second.number, entry->second.href, entry->second.linkId);
+      linksOnLine |= footnoteLinkBit(linkId);
     }
   }
 
-  // Track cumulative words to retire links after laying out their final word.
   wordsExtractedInBlock += line->wordCount() + lineImages.size();
-  auto footnoteIt = pendingFootnotes.begin();
-  while (footnoteIt != pendingFootnotes.end() && footnoteIt->first <= wordsExtractedInBlock) {
-    currentPage->addFootnote(footnoteIt->second.number, footnoteIt->second.href, footnoteIt->second.linkId);
-    ++footnoteIt;
-  }
-  pendingFootnotes.erase(pendingFootnotes.begin(), footnoteIt);
+  retirePendingFootnotes(linksOnLine, line->wordCount() > 0);
   attachPendingPublisherPageMarkers(currentPageNextY);
 
   // Apply horizontal left inset (margin + padding) as x position offset
@@ -5139,10 +5185,14 @@ void ChapterHtmlSlimParser::makePages(const bool completeBlock) {
   }
 
   // Fallback: transfer any remaining pending footnotes to current page.
-  // Normally addLineToPage handles this via word-index tracking, but this catches
-  // edge cases where a footnote's word index equals the exact block size.
+  // Normally retirePendingFootnotes() drops them as layout passes their links. What
+  // remains is a link shown on the block's last lines, or one whose word index equals
+  // the exact block size. A shown link is already listed on every page showing it, so
+  // only the others are added; trailing image-only lines may have moved to a new page.
   if (!pendingFootnotes.empty() && currentPage) {
     for (const auto& [idx, fn] : pendingFootnotes) {
+      const uint64_t linkBit = footnoteLinkBit(fn.linkId);
+      if ((footnoteLinksWithWords & linkBit) != 0 && (footnoteLinksShown & linkBit) != 0) continue;
       currentPage->addFootnote(fn.number, fn.href, fn.linkId);
     }
     pendingFootnotes.clear();

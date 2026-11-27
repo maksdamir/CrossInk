@@ -9,6 +9,7 @@
 #include <GfxRenderer.h>
 
 #include <algorithm>
+#include <cstring>
 
 std::vector<Hyphenator::BreakInfo> Hyphenator::breakOffsets(const std::string&, bool) { return {}; }
 
@@ -37,29 +38,56 @@ TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<in
     std::copy(fontFamilies.begin(), fontFamilies.end(), wordFamilies.get());
   }
   if (wordXpos.empty()) return;
+  // Arena layout: source ranges, int16 positions, uint16 text offsets, flags, sizes, then
+  // NUL-terminated word text. Text is kept when there is one entry per word, so tests can see
+  // what each laid-out line shows.
+  const bool keepText = words.size() == wordXpos.size();
   const size_t sourceBytes = sourceRanges.size() * sizeof(SourceRange);
-  arena = std::make_unique<uint8_t[]>(sourceBytes + wordXpos.size() * sizeof(int16_t) + wordFlags.size() +
-                                      wordSizes.size());
+  const size_t positionBytes = wordXpos.size() * sizeof(int16_t);
+  const size_t offsetBytes = keepText ? words.size() * sizeof(uint16_t) : 0;
+  size_t textSize = 0;
+  if (keepText) {
+    for (const auto& word : words) textSize += word.size() + 1;
+  }
+  arena = std::make_unique<uint8_t[]>(sourceBytes + positionBytes + offsetBytes + wordFlags.size() + wordSizes.size() +
+                                      textSize);
+  uint8_t* cursor = arena.get();
   if (sourceBytes) {
-    sourceRangesArr = reinterpret_cast<const SourceRange*>(arena.get());
-    std::memcpy(arena.get(), sourceRanges.data(), sourceBytes);
+    sourceRangesArr = reinterpret_cast<const SourceRange*>(cursor);
+    std::memcpy(cursor, sourceRanges.data(), sourceBytes);
     sourceRangesPresent = true;
   }
-  auto* positions = reinterpret_cast<int16_t*>(arena.get() + sourceBytes);
+  cursor += sourceBytes;
+  auto* positions = reinterpret_cast<int16_t*>(cursor);
   std::copy(wordXpos.begin(), wordXpos.end(), positions);
   xposArr = positions;
-  if (!wordSizes.empty()) {
-    auto* sizes = arena.get() + sourceBytes + wordXpos.size() * sizeof(int16_t) + wordFlags.size();
-    std::copy(wordSizes.begin(), wordSizes.end(), sizes);
-    wordSizesArr = sizes;
-    wordSizesPresent = true;
-  }
+  cursor += positionBytes;
+  auto* offsets = reinterpret_cast<uint16_t*>(cursor);
+  cursor += offsetBytes;
   if (!wordFlags.empty()) {
-    auto* flags = arena.get() + sourceBytes + wordXpos.size() * sizeof(int16_t);
-    std::copy(wordFlags.begin(), wordFlags.end(), flags);
-    wordFlagsArr = flags;
+    std::copy(wordFlags.begin(), wordFlags.end(), cursor);
+    wordFlagsArr = cursor;
     wordFlagsPresent = true;
   }
+  cursor += wordFlags.size();
+  if (!wordSizes.empty()) {
+    std::copy(wordSizes.begin(), wordSizes.end(), cursor);
+    wordSizesArr = cursor;
+    wordSizesPresent = true;
+  }
+  cursor += wordSizes.size();
+  if (!keepText) return;
+
+  auto* text = reinterpret_cast<char*>(cursor);
+  uint16_t offset = 0;
+  for (size_t i = 0; i < words.size(); ++i) {
+    offsets[i] = offset;
+    std::memcpy(text + offset, words[i].c_str(), words[i].size() + 1);
+    offset = static_cast<uint16_t>(offset + words[i].size() + 1);
+  }
+  textOffArr = offsets;
+  textArr = text;
+  textBytes = offset;
 }
 bool TextBlock::hasRuby() const { return false; }
 

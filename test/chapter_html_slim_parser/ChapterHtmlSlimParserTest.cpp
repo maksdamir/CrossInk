@@ -8,7 +8,9 @@
 #include <array>
 #include <deque>
 #include <memory>
+#include <set>
 #include <string>
+#include <vector>
 
 #define class struct
 #define private public
@@ -1879,6 +1881,237 @@ TEST_F(ChapterHtmlSlimParserTest, FragmentFlushKeepsActiveLinkOnEveryEmittedPage
   ASSERT_NE(parser.currentPage, nullptr);
   ASSERT_EQ(parser.currentPage->footnotes.size(), 1u);
   EXPECT_STREQ(parser.currentPage->footnotes[0].href, "#note");
+}
+
+// Lays out paragraphs at 10 characters per line and 3 lines per page, collecting the
+// completed pages so tests can compare the links each page shows with the notes it lists.
+class FootnotePageAttachmentTest : public ChapterHtmlSlimParserTest {
+ protected:
+  std::vector<std::unique_ptr<Page>> pages;
+
+  void SetUp() override {
+    ChapterHtmlSlimParserTest::SetUp();
+    parser.completePageFn = [this](std::unique_ptr<Page> page, uint16_t, uint16_t, uint32_t, uint32_t) {
+      pages.push_back(std::move(page));
+    };
+    renderer.textAdvancePerChar = 10;
+    parser.viewportWidth = 100;
+    parser.viewportHeight = 48;
+  }
+
+  void text(const std::string& value) {
+    ChapterHtmlSlimParser::characterData(&parser, value.c_str(), static_cast<int>(value.size()));
+  }
+
+  void link(const char* href, const std::string& value) {
+    const XML_Char* attributes[] = {"href", href, nullptr};
+    ChapterHtmlSlimParser::startElement(&parser, "a", attributes);
+    text(value);
+    ChapterHtmlSlimParser::endElement(&parser, "a");
+  }
+
+  void finish() {
+    parser.flushPartWordBuffer();
+    parser.makePages();
+    if (parser.currentPage) parser.completeCurrentPage();
+  }
+
+  // 90x25 inline images: too wide to share a 100px line with a 10-character word, low enough
+  // (under two 16px lines) to stay inline.
+  void useWideInlineImages() {
+    epub.optimizerImageAvailable = true;
+    epub.optimizerImageWidth = 90;
+    epub.optimizerImageHeight = 25;
+  }
+
+  void image() {
+    const XML_Char* attributes[] = {"src", "wide.jpg", nullptr};
+    ChapterHtmlSlimParser::startElement(&parser, "img", attributes);
+    ChapterHtmlSlimParser::endElement(&parser, "img");
+  }
+
+  static std::set<uint8_t> shownLinkIds(const Page& page) {
+    std::set<uint8_t> ids;
+    for (const auto& element : page.elements) {
+      if (!element || element->getTag() != TAG_PageLine) continue;
+      const auto& block = *static_cast<const PageLine&>(*element).getBlock();
+      for (uint16_t i = 0; i < block.wordCount(); ++i) {
+        if (block.wordLinkId(i) != 0) ids.insert(block.wordLinkId(i));
+      }
+    }
+    return ids;
+  }
+
+  static std::set<uint8_t> listedLinkIds(const Page& page) {
+    std::set<uint8_t> ids;
+    for (const auto& footnote : page.footnotes) ids.insert(footnote.linkId);
+    return ids;
+  }
+
+  // The first page index that shows a link, or -1.
+  int firstPageShowingLinks() const {
+    for (size_t i = 0; i < pages.size(); ++i) {
+      if (!shownLinkIds(*pages[i]).empty()) return static_cast<int>(i);
+    }
+    return -1;
+  }
+
+  // Page/line/word dump for failure messages; "#n" marks link id n, e.g. "p0: [aaa] [bbb] | p1: [1#1 tail]".
+  std::string describePages() const {
+    std::string out;
+    for (size_t i = 0; i < pages.size(); ++i) {
+      out += (i ? " | p" : "p") + std::to_string(i) + ":";
+      for (const auto& element : pages[i]->elements) {
+        if (element && element->getTag() == TAG_PageImage) out += " [img]";
+        if (!element || element->getTag() != TAG_PageLine) continue;
+        const auto& block = *static_cast<const PageLine&>(*element).getBlock();
+        out += " [";
+        for (uint16_t w = 0; w < block.wordCount(); ++w) {
+          out += (w ? " " : "") + std::string(block.wordText(w));
+          if (block.wordLinkId(w) != 0) out += "#" + std::to_string(block.wordLinkId(w));
+        }
+        out += "]";
+      }
+      if (out.size() > 2000) return out + " ...";
+    }
+    return out;
+  }
+
+  void expectEveryPageListsExactlyItsLinks() const {
+    for (size_t i = 0; i < pages.size(); ++i) {
+      EXPECT_EQ(listedLinkIds(*pages[i]), shownLinkIds(*pages[i])) << "page " << i << "; " << describePages();
+    }
+  }
+};
+
+// Splitting a word across lines (hyphenation, or breaking an overlong token) adds words during
+// layout, so the link's recorded word position runs ahead of the laid-out lines. The note must
+// stay with the page showing its link rather than move to the page before it. The test stubs
+// have no hyphenation patterns, so a long unbroken token stands in for a hyphenated word: it is
+// split through the same word-insertion path.
+class FootnoteAfterSplitWordTest : public FootnotePageAttachmentTest {
+ protected:
+  void layOutLinkAfterSplitWord(const bool hyphenation) {
+    parser.viewportWidth = 1000;  // 100 characters per line
+    parser.currentTextBlock = std::make_unique<ParsedText>(false, false, hyphenation);
+
+    // Three full lines fill the first page, so the link starts the second one.
+    text(std::string(300, 'x') + " ");
+    link("#note-1", "1");
+    text(" tail");
+    finish();
+
+    ASSERT_GE(pages.size(), 2u) << describePages();
+    ASSERT_GE(firstPageShowingLinks(), 1)
+        << "the link must start a later page for this test to mean anything; " << describePages();
+    expectEveryPageListsExactlyItsLinks();
+  }
+};
+
+TEST_F(FootnoteAfterSplitWordTest, LinkIsListedOnItsOwnPageWithoutHyphenation) {
+  layOutLinkAfterSplitWord(/*hyphenation=*/false);
+}
+
+TEST_F(FootnoteAfterSplitWordTest, LinkIsListedOnItsOwnPageWithHyphenation) {
+  layOutLinkAfterSplitWord(/*hyphenation=*/true);
+}
+
+TEST_F(FootnotePageAttachmentTest, LinkWrappedAcrossPagesIsListedOnBothPages) {
+  text("aaaaaaaaaa bbbbbbbbbb ");
+  link("#note-1", "cccccccccc dddddddddd");
+  text(" tail");
+  finish();
+
+  ASSERT_GE(pages.size(), 2u) << describePages();
+  ASSERT_EQ(shownLinkIds(*pages[0]).size(), 1u) << describePages();
+  ASSERT_EQ(shownLinkIds(*pages[1]), shownLinkIds(*pages[0]));
+  expectEveryPageListsExactlyItsLinks();
+}
+
+TEST_F(FootnotePageAttachmentTest, LinkEndingAPageIsNotListedOnTheNextPage) {
+  text("aaaaaaaaaa bbbbbbbbbb ccccccccc");
+  link("#note-1", "1");
+  text(" tail");
+  finish();
+
+  ASSERT_GE(pages.size(), 2u) << describePages();
+  ASSERT_EQ(shownLinkIds(*pages[0]).size(), 1u) << describePages();
+  EXPECT_TRUE(shownLinkIds(*pages[1]).empty());
+  expectEveryPageListsExactlyItsLinks();
+}
+
+// An inline image inside a link carries no link id, so a line holding only the image does not
+// show the link. Text of the same link after it must still be listed on its own page.
+TEST_F(FootnotePageAttachmentTest, ImageLineInsideALinkDoesNotEndIt) {
+  useWideInlineImages();
+  const XML_Char* linkAttributes[] = {"href", "#note-1", nullptr};
+  ChapterHtmlSlimParser::startElement(&parser, "a", linkAttributes);
+  text("aaaaaaaaaa ");
+  image();
+  text(" bbbbbbbbbb");
+  ChapterHtmlSlimParser::endElement(&parser, "a");
+  text(" tail");
+  finish();
+
+  // p0: the link's first line and the image line; p1: the rest of the link.
+  ASSERT_GE(pages.size(), 2u) << describePages();
+  ASSERT_EQ(shownLinkIds(*pages[0]).size(), 1u) << describePages();
+  ASSERT_EQ(shownLinkIds(*pages[1]), shownLinkIds(*pages[0])) << describePages();
+  expectEveryPageListsExactlyItsLinks();
+}
+
+TEST_F(FootnotePageAttachmentTest, ImageWrappedPastTheLinkToANewPageDoesNotListIt) {
+  useWideInlineImages();
+  text("aaaaaaaaaa bbbbbbbbbb cccccccc ");
+  link("#note-1", "1");
+  text(" ");
+  image();
+  finish();
+
+  // p0 ends with the link; the image wraps onto p1 at the end of the paragraph.
+  ASSERT_EQ(pages.size(), 2u) << describePages();
+  ASSERT_EQ(shownLinkIds(*pages[0]).size(), 1u) << describePages();
+  ASSERT_FALSE(pages[1]->elements.empty());
+  expectEveryPageListsExactlyItsLinks();
+}
+
+// A <br> inside a link lays out the text before it while the link is still open. When nothing of
+// the link follows the <br>, the note must not ride along to the following paragraph's pages.
+TEST_F(FootnotePageAttachmentTest, LinkEndingInALineBreakIsNotListedOnLaterPages) {
+  text("aaaaaaaaaa ");
+  const XML_Char* linkAttributes[] = {"href", "#note-1", nullptr};
+  ChapterHtmlSlimParser::startElement(&parser, "a", linkAttributes);
+  text("bbbbbbbbbb");
+  ChapterHtmlSlimParser::startElement(&parser, "br", nullptr);
+  ChapterHtmlSlimParser::endElement(&parser, "br");
+  ChapterHtmlSlimParser::endElement(&parser, "a");
+  for (int i = 0; i < 6; ++i) text(" tail");
+  finish();
+
+  ASSERT_GE(pages.size(), 2u) << describePages();
+  ASSERT_EQ(shownLinkIds(*pages[0]).size(), 1u) << describePages();
+  ASSERT_TRUE(shownLinkIds(*pages.back()).empty()) << describePages();
+  expectEveryPageListsExactlyItsLinks();
+}
+
+// A link long enough to trigger a fragment flush lays out lines while it is still open, before
+// </a> queues it. Once queued, the note must still retire after the link's last line rather than
+// ride along to the pages of text that follow it.
+TEST_F(FootnotePageAttachmentTest, LinkLaidOutBeforeItClosesIsNotListedOnLaterPages) {
+  // The flush counts word bytes, not spaces, so overshoot the limit comfortably.
+  std::string linked;
+  while (linked.size() <= 2u * parser.textRunBytesBeforeLayoutLimit()) linked += "linked ";
+  const XML_Char* attributes[] = {"href", "#note-1", nullptr};
+  ChapterHtmlSlimParser::startElement(&parser, "a", attributes);
+  text(linked);
+  ASSERT_FALSE(pages.empty()) << "the link must flush pages while open for this test to mean anything";
+  ChapterHtmlSlimParser::endElement(&parser, "a");
+  for (int i = 0; i < 12; ++i) text(" tail");
+  finish();
+
+  ASSERT_GE(pages.size(), 2u);
+  EXPECT_TRUE(shownLinkIds(*pages.back()).empty()) << "the text after the link must fill a page of its own";
+  expectEveryPageListsExactlyItsLinks();
 }
 
 TEST_F(ChapterHtmlSlimParserTest, PageBreakBeforeDoesNotRepeatPreviousBottomSpacing) {
