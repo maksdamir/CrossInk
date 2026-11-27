@@ -6,9 +6,11 @@ set(PARSER_TEST_DIR ${REPO_ROOT}/test/chapter_html_slim_parser)
 add_executable(BookTextSearchParityTest
   BookTextSearchParityTest.cpp
   ${PARSER_TEST_DIR}/ParserLinkStubs.cpp
+  ${REPO_ROOT}/lib/Epub/Epub/converters/ImageDimsProbe.cpp
   ${REPO_ROOT}/lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp
   ${REPO_ROOT}/lib/Epub/Epub/css/CssParser.cpp
   ${REPO_ROOT}/lib/Epub/Epub/ParsedText.cpp
+  ${REPO_ROOT}/lib/Epub/Epub/hyphenation/HyphenationCommon.cpp
   ${REPO_ROOT}/lib/Epub/Epub/htmlEntities.cpp
   ${REPO_ROOT}/lib/Epub/Epub/search/BookTextSearch.cpp
   ${REPO_ROOT}/lib/Utf8/Utf8.cpp
@@ -35,7 +37,7 @@ target_include_directories(BookTextSearchParityTest PRIVATE
 )
 
 target_compile_definitions(BookTextSearchParityTest PRIVATE
-  XML_CONTEXT_BYTES=1024
+  XML_CONTEXT_BYTES=0
   XML_GE=0
   CROSSINK_FIXTURE_ROOT="${REPO_ROOT}/test/epubs-src"
 )

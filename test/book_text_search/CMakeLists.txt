@@ -19,7 +19,7 @@ target_include_directories(BookTextSearchTest PRIVATE
 
 # Match the firmware's expat configuration (platformio.ini build_flags).
 target_compile_definitions(BookTextSearchTest PRIVATE
-  XML_CONTEXT_BYTES=1024
+  XML_CONTEXT_BYTES=0
   XML_GE=0
 )
 

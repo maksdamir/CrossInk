@@ -10,7 +10,7 @@
 #include <esp_task_wdt.h>
 #endif
 
-#include <FsHelpers.h>
+#include <Epub/Section.h>
 #include <HalStorage.h>
 
 #include <algorithm>
@@ -31,7 +31,7 @@ constexpr fui::ActionId ACTION_ROW = 1;
 constexpr int NEW_SEARCH_ROW = 0;
 // Read size for one chapter. ZipFile allocates a read and an output buffer of
 // this size per chapter; the cached-HTML path reuses one buffer of it. With
-// PSRAM (X4 Pro, Sticky, X4 Classic) larger reads mean fewer SD transactions,
+// PSRAM (every device but the X3/X4) larger reads mean fewer SD transactions,
 // inflate calls and XML_Parse() calls per chapter. Without PSRAM keep the 1 KB
 // the KOReader sync resolver already streams with from this reader context.
 constexpr size_t STREAM_CHUNK_BYTES_PSRAM = 16 * 1024;
@@ -130,7 +130,6 @@ void EpubReaderSearchActivity::onExit() {
   // Dropping the scanner releases its expat parser if a scan was interrupted;
   // the session keeps nextSpine() so reopening resumes from that chapter.
   scanner.reset();
-  closeZip();
   readBuffer.reset();
   mappedInput.setReaderTouchscreenOverride(false);
   Activity::onExit();
@@ -217,7 +216,6 @@ void EpubReaderSearchActivity::scanNextSpine() {
   const bool firstHits = renderedResultCount == 0 && session.resultCount() > 0;
   if (!session.scanning() || firstHits || now - lastScanRenderMs >= SCAN_RENDER_INTERVAL_MS) {
     if (!session.scanning()) {
-      closeZip();
       LOG_INF("SRCH",
               "Search finished: %u hits%s; %u chapters (%u cached), %lu chars in %lu ms (read+inflate %lu ms, "
               "scan %lu ms, redraw %lu ms); min free=%u maxAlloc=%u",
@@ -238,12 +236,11 @@ bool EpubReaderSearchActivity::streamSpine(const int spineIndex, const std::stri
                                            bool& fromCache) {
   fromCache = false;
   // A chapter the reader has laid out keeps an uncompressed copy of its XHTML
-  // (Section's html/<spine>.html: written byte for byte from the zip and only
-  // renamed into place once complete). Reading it skips inflate entirely. If
-  // the reader still holds that file open for an unfinished layout, the open
-  // fails and the chapter is read from the EPUB instead.
+  // (Section::cachedHtmlPath()). Reading it skips inflate entirely. If the
+  // reader still holds that file open for an unfinished layout, the open fails
+  // and the chapter is read from the EPUB instead.
   if (readBuffer) {
-    const std::string cachedPath = epub->getCachePath() + "/html/" + std::to_string(spineIndex) + ".html";
+    const std::string cachedPath = Section::cachedHtmlPath(*epub, spineIndex);
     HalFile file;
     if (Storage.exists(cachedPath.c_str()) && Storage.openFileForRead("SRCH", cachedPath, file)) {
       fromCache = true;
@@ -264,22 +261,10 @@ bool EpubReaderSearchActivity::streamSpine(const int spineIndex, const std::stri
     }
   }
 
-  if (!zip) {
-    zip = makeUniqueNoThrow<ZipFile>(epub->getPath());
-    if (zip && !zip->open()) {
-      LOG_ERR("SRCH", "Could not open %s for searching", epub->getPath().c_str());
-      zip.reset();
-    }
-  }
-  // Same entry-name mapping as Epub::readItemContentsToStream().
-  if (zip) return zip->readFileToStream(FsHelpers::normalisePath(href).c_str(), sink, streamChunkBytes, true);
+  // The same read the layout's build makes: it decrypts items the book marks
+  // as encrypted, and the book's cached ZIP directory finds each entry without
+  // rescanning the archive.
   return epub->readItemContentsToStream(href, sink, streamChunkBytes, true);
-}
-
-void EpubReaderSearchActivity::closeZip() {
-  if (!zip) return;
-  zip->close();
-  zip.reset();
 }
 
 void EpubReaderSearchActivity::cancel() {
@@ -337,9 +322,8 @@ void EpubReaderSearchActivity::onRowEvent(const fui::ActionEvent& event, void* u
 }
 
 Rect EpubReaderSearchActivity::headerRect() const {
-  const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-  return Rect{safe.x, safe.y + metrics.topPadding, safe.width, TouchHeaderBackButton::height(metrics, mappedInput)};
+  return TouchHeaderBackButton::headerRect(renderer, mappedInput, safe);
 }
 
 Rect EpubReaderSearchActivity::statusRect() const {
@@ -431,13 +415,18 @@ void EpubReaderSearchActivity::buildResultsScreen(UiApp::ScreenType& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
   const Rect status = statusRect();
-  screen.setContentMargin(fui::Insets{static_cast<int16_t>(status.y + status.height),
-                                      static_cast<int16_t>(renderer.getScreenWidth() - safe.x - safe.width),
-                                      static_cast<int16_t>(renderer.getScreenHeight() - safe.y - safe.height),
-                                      static_cast<int16_t>(safe.x)});
+  // Margins measured from the screen edges; the helper counts calibrated edges once.
+  setUiContentMargin(screen, renderer,
+                     fui::Insets{static_cast<int16_t>(status.y + status.height),
+                                 static_cast<int16_t>(renderer.getScreenWidth() - safe.x - safe.width),
+                                 static_cast<int16_t>(renderer.getScreenHeight() - safe.y - safe.height),
+                                 static_cast<int16_t>(safe.x)});
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
 
   const int rows = totalRows();
+  // Snippets and chapter titles are book text: draw them with the UI fallback
+  // font for characters the built-in UI font lacks, as the chapter list does.
+  FilenameUiFontScope fonts(uiTarget, renderer);
   fui::ListProps props;
   props.labelText = screen.theme().bodyText;
   const auto fit = configureUiList(props, screen.theme(), screen.body(), UiListRowType::WithSubtitle);
@@ -492,7 +481,7 @@ void EpubReaderSearchActivity::render(RenderLock&&) {
   renderer.drawLine(status.x, status.y + status.height - 1, status.x + status.width - 1, status.y + status.height - 1,
                     1, true);
   uiReady = false;
-  app.render();
+  renderUiApp(app, uiTarget);
   uiReady = true;
   const auto labels =
       mappedInput.mapLabels(mappedInput.withBackArrow(tr(STR_BACK)), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));

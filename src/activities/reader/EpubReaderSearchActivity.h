@@ -4,7 +4,6 @@
 #include <FreeInkApp.h>
 #include <FreeInkUIGfxRenderer.h>
 #include <Memory.h>
-#include <ZipFile.h>
 
 #include <array>
 #include <atomic>
@@ -28,9 +27,6 @@ class EpubReaderSearchActivity final : public Activity {
   std::shared_ptr<Epub> epub;
   BookSearchSession& session;
   std::unique_ptr<booksearch::ChapterScanner> scanner;
-  // EPUB zip kept open for one scan pass, so chapters after the first skip
-  // reopening the file and re-reading its end-of-central-directory record.
-  std::unique_ptr<ZipFile> zip;
   // Buffer for reading a chapter's uncompressed cached XHTML.
   HeapByteBuffer readBuffer;
   size_t streamChunkBytes = 0;
@@ -70,7 +66,6 @@ class EpubReaderSearchActivity final : public Activity {
   void promptNewSearch();
   void scanNextSpine();
   bool streamSpine(int spineIndex, const std::string& href, Print& sink, bool& fromCache);
-  void closeZip();
   void formatHeader();
   Rect headerRect() const;
   Rect statusRect() const;

@@ -25,9 +25,10 @@ constexpr const char* const SKIPPED_TAGS[] = {"head", "style", "script", "title"
 // like whitespace so "end.</p><p>Next" can match "end. Next". They do not
 // change visible offsets.
 constexpr const char* const BOUNDARY_TAGS[] = {
-    "address",    "article", "aside",  "blockquote", "body", "br",      "caption", "center", "dd", "div",    "dl", "dt",
-    "figcaption", "figure",  "footer", "h1",         "h2",   "h3",      "h4",      "h5",     "h6", "header", "hr", "li",
-    "main",       "nav",     "ol",     "p",          "pre",  "section", "table",   "td",     "th", "tr",     "ul"};
+    "address", "article", "aside",    "blockquote", "body",   "br",     "caption", "center", "dd", "div",
+    "dl",      "dt",      "fieldset", "figcaption", "figure", "footer", "h1",      "h2",     "h3", "h4",
+    "h5",      "h6",      "header",   "hgroup",     "hr",     "li",     "main",    "nav",    "ol", "p",
+    "pre",     "section", "table",    "td",         "th",     "tr",     "ul"};
 
 bool matchesAny(const char* name, const char* const* list, const size_t count) {
   for (size_t i = 0; i < count; ++i) {
@@ -133,7 +134,8 @@ bool isSvgPath(std::string_view path) {
 
 // Mirrors ImageDecoderFactory::isFormatSupported(): formats the reader can draw.
 bool isDrawableImagePath(const std::string_view path) {
-  return hasExtension(path, ".jpg") || hasExtension(path, ".jpeg") || hasExtension(path, ".png");
+  return hasExtension(path, ".jpg") || hasExtension(path, ".jpeg") || hasExtension(path, ".png") ||
+         hasExtension(path, ".gif");
 }
 
 size_t emit(uint32_t* out, const char* ascii) {

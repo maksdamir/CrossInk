@@ -184,20 +184,21 @@ TEST(BookTextSearchParity, ImageAltTextCountsLikeTheLayoutParser) {
                            "<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:xlink=\"http://www.w3.org/1999/xlink\">"
                            "<head><title>T</title></head><body>\n";
   const std::string close = "\n<p>tail</p></body></html>\n";
-  // Every case here is decided by markup and the Images setting alone. A JPEG
-  // or PNG in display mode is excluded: whether it is drawn or falls back to
+  // Every case here is decided by markup and the Images setting alone. A JPEG,
+  // PNG or GIF in display mode is excluded: whether it is drawn or falls back to
   // alt text depends on decoding it, which the host stubs cannot do.
   const std::vector<std::pair<std::string, std::vector<uint8_t>>> fixtures = {
       {"<table><tr><td>cell<img src=\"a.jpg\" alt=\"Chart\"/>text</td></tr></table>", {0, 1, 2}},
       {"<table><tr><td><table><tr><td><img alt=\"Nested\"/></td></tr></table></td></tr></table>", {0, 1, 2}},
       {"<p>a</p><img src=\"pics/map.jpg\" alt=\"Map\"/>", {1, 2}},
-      {"<p>a</p><img src=\"pics/map.gif\" alt=\"Map\"/>", {0, 1, 2}},
+      {"<p>a</p><img src=\"pics/map.gif\" alt=\"Map\"/>", {1, 2}},
+      {"<p>a</p><img src=\"pics/map.webp\" alt=\"Map\"/>", {0, 1, 2}},
       {"<p>a</p><img src=\"pics/map.png?v=2\" alt=\"Map\"/>", {0, 1, 2}},
       {"<p>a</p><img alt=\"No source\"/>", {0, 1, 2}},
       {"<p>a</p><img src=\"pics/map.svg\" alt=\"Map\"/>", {0, 1, 2}},
-      {"<p>a</p><svg><image xlink:href=\"pics/map.gif\" alt=\"Map\"/></svg>", {0, 1, 2}},
-      {"<p>a</p><img src=\"pics/map.gif\" data-AmznRemoved-M8=\"true\" alt=\"Map\"/>", {0, 1, 2}},
-      {"<p>a</p><img src=\"pics/map.gif\" alt=\"\"/>", {0, 1, 2}},
+      {"<p>a</p><svg><image xlink:href=\"pics/map.webp\" alt=\"Map\"/></svg>", {0, 1, 2}},
+      {"<p>a</p><img src=\"pics/map.webp\" data-AmznRemoved-M8=\"true\" alt=\"Map\"/>", {0, 1, 2}},
+      {"<p>a</p><img src=\"pics/map.webp\" alt=\"\"/>", {0, 1, 2}},
       {"<p>a<span hidden=\"\"><img alt=\"Hidden\"/></span></p>", {0, 1, 2}},
   };
   for (const auto& [body, modes] : fixtures) {

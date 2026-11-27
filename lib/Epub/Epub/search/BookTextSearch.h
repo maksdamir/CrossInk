@@ -23,7 +23,7 @@
 //
 // The layout settings that change what the parser counts are passed in as
 // ScanOptions. Three cases cannot be mirrored because they depend on state the
-// scanner does not have: content hidden only through stylesheet classes (the
+// scanner does not have: content hidden only through stylesheet rules (the
 // scanner never loads the book's CSS), images that fail to decode at layout
 // time, and a chapter the reader rebuilt in low-memory safe mode (which drops
 // publisher styles). Each shifts the parser's count relative to the scanner's

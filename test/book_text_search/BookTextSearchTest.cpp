@@ -162,6 +162,9 @@ TEST(BookTextSearchScan, MatchesAcrossInlineMarkupAndCollapsedWhitespace) {
 TEST(BookTextSearchScan, TreatsBlockBoundariesAsSpaces) {
   EXPECT_EQ(scan(doc("<p>end.</p><p>Next</p>"), "end. next").hits.size(), 1u);
   EXPECT_EQ(scan(doc("<p>end</p><p>next</p>"), "endnext").hits.size(), 0u);
+  // Block elements the layout parser lays out as boxes of their own.
+  EXPECT_EQ(scan(doc("<fieldset>boxed</fieldset>after"), "boxed after").hits.size(), 1u);
+  EXPECT_EQ(scan(doc("<hgroup>title</hgroup>body"), "title body").hits.size(), 1u);
   EXPECT_EQ(scan(doc("<p>line<br/>break</p>"), "line break").hits.size(), 1u);
 }
 
@@ -355,17 +358,18 @@ TEST(BookTextSearchScan, CountsImagePlaceholdersOnlyWhenTheParserShowsThem) {
     bool showsAlt;
   };
   const Case cases[] = {
-      {"<img src=\"pics/map.jpg\" alt=\"Map\"/>", 0, false},          // drawn
-      {"<img src=\"pics/map.PNG#frag\" alt=\"Map\"/>", 0, false},     // drawn
-      {"<img src=\"pics/map.jpg\" alt=\"Map\"/>", 1, true},           // placeholder setting
-      {"<img src=\"pics/map.jpg\" alt=\"Map\"/>", 2, false},          // suppressed
-      {"<img src=\"pics/map.gif\" alt=\"Map\"/>", 0, true},           // cannot draw GIF
-      {"<img src=\"pics/map.png?v=2\" alt=\"Map\"/>", 0, true},       // extension check sees the query
-      {"<img alt=\"Map\"/>", 0, true},                                // no source
-      {"<img src=\"pics/map.svg\" alt=\"Map\"/>", 0, false},          // SVG skipped
-      {"<image xlink:href=\"pics/map.gif\" alt=\"Map\"/>", 0, true},  // SVG <image> element
-      {"<img src=\"pics/map.gif\" data-AmznRemoved-M8=\"true\" alt=\"Map\"/>", 0, false},  // Kindle fallback
-      {"<img src=\"pics/map.gif\" alt=\"\"/>", 0, false},                                  // empty alt
+      {"<img src=\"pics/map.jpg\" alt=\"Map\"/>", 0, false},           // drawn
+      {"<img src=\"pics/map.PNG#frag\" alt=\"Map\"/>", 0, false},      // drawn
+      {"<img src=\"pics/map.gif\" alt=\"Map\"/>", 0, false},           // drawn (first frame)
+      {"<img src=\"pics/map.jpg\" alt=\"Map\"/>", 1, true},            // placeholder setting
+      {"<img src=\"pics/map.jpg\" alt=\"Map\"/>", 2, false},           // suppressed
+      {"<img src=\"pics/map.webp\" alt=\"Map\"/>", 0, true},           // cannot draw WebP
+      {"<img src=\"pics/map.png?v=2\" alt=\"Map\"/>", 0, true},        // extension check sees the query
+      {"<img alt=\"Map\"/>", 0, true},                                 // no source
+      {"<img src=\"pics/map.svg\" alt=\"Map\"/>", 0, false},           // SVG skipped
+      {"<image xlink:href=\"pics/map.webp\" alt=\"Map\"/>", 0, true},  // SVG <image> element
+      {"<img src=\"pics/map.webp\" data-AmznRemoved-M8=\"true\" alt=\"Map\"/>", 0, false},  // Kindle fallback
+      {"<img src=\"pics/map.webp\" alt=\"\"/>", 0, false},                                  // empty alt
   };
   for (const auto& c : cases) {
     const auto result = scan(doc(std::string("<p>a</p>") + c.image + "<p>target</p>"), "target", 1024, 0, c.mode);

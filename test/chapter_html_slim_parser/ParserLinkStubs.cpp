@@ -26,39 +26,57 @@ bool computeVisualWordOrder(const std::vector<std::string>& words, bool, std::ve
 TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<int16_t>& wordXpos,
                      const std::vector<EpdFontFamily::Style>&, const std::vector<uint8_t>&,
                      const std::vector<uint16_t>&, const std::vector<uint16_t>&, const std::vector<uint8_t>& wordFlags,
-                     const std::vector<bool>&, const BlockStyle& blockStyle, std::vector<std::string> rubyTexts)
-    : blockStyle(blockStyle), numWords(static_cast<uint16_t>(words.size())), rubyTexts(std::move(rubyTexts)) {
+                     const std::vector<bool>&, const BlockStyle& blockStyle, std::vector<std::string> rubyTexts,
+                     const std::vector<uint8_t>& wordSizes, const char*, int8_t characterSpacing,
+                     const std::vector<uint32_t>& fontFamilies, const std::vector<SourceRange>& sourceRanges)
+    : blockStyle(blockStyle),
+      characterSpacing(characterSpacing),
+      numWords(static_cast<uint16_t>(words.size())),
+      rubyTexts(std::move(rubyTexts)) {
+  if (!fontFamilies.empty()) {
+    wordFamilies = std::make_unique<uint32_t[]>(fontFamilies.size());
+    std::copy(fontFamilies.begin(), fontFamilies.end(), wordFamilies.get());
+  }
   if (wordXpos.empty()) return;
-  // Positions are always kept. Word text and flags (which carry link ids) are kept too when
-  // there is one entry per word, so tests can see what each line shows.
-  // Arena layout: int16 positions, then uint16 text offsets, flags, and NUL-terminated text.
+  // Arena layout: source ranges, int16 positions, uint16 text offsets, flags, sizes, then
+  // NUL-terminated word text. Text is kept when there is one entry per word, so tests can see
+  // what each laid-out line shows.
   const bool keepText = words.size() == wordXpos.size();
-  const bool keepFlags = keepText && wordFlags.size() == words.size();
+  const size_t sourceBytes = sourceRanges.size() * sizeof(SourceRange);
   const size_t positionBytes = wordXpos.size() * sizeof(int16_t);
   const size_t offsetBytes = keepText ? words.size() * sizeof(uint16_t) : 0;
-  const size_t flagBytes = keepFlags ? wordFlags.size() : 0;
   size_t textSize = 0;
   if (keepText) {
     for (const auto& word : words) textSize += word.size() + 1;
   }
-  arena = std::make_unique<uint8_t[]>(positionBytes + offsetBytes + flagBytes + textSize);
+  arena = std::make_unique<uint8_t[]>(sourceBytes + positionBytes + offsetBytes + wordFlags.size() + wordSizes.size() +
+                                      textSize);
   uint8_t* cursor = arena.get();
-
+  if (sourceBytes) {
+    sourceRangesArr = reinterpret_cast<const SourceRange*>(cursor);
+    std::memcpy(cursor, sourceRanges.data(), sourceBytes);
+    sourceRangesPresent = true;
+  }
+  cursor += sourceBytes;
   auto* positions = reinterpret_cast<int16_t*>(cursor);
   std::copy(wordXpos.begin(), wordXpos.end(), positions);
   xposArr = positions;
   cursor += positionBytes;
-  if (!keepText) return;
-
   auto* offsets = reinterpret_cast<uint16_t*>(cursor);
   cursor += offsetBytes;
-
-  if (keepFlags) {
+  if (!wordFlags.empty()) {
     std::copy(wordFlags.begin(), wordFlags.end(), cursor);
     wordFlagsArr = cursor;
     wordFlagsPresent = true;
-    cursor += flagBytes;
   }
+  cursor += wordFlags.size();
+  if (!wordSizes.empty()) {
+    std::copy(wordSizes.begin(), wordSizes.end(), cursor);
+    wordSizesArr = cursor;
+    wordSizesPresent = true;
+  }
+  cursor += wordSizes.size();
+  if (!keepText) return;
 
   auto* text = reinterpret_cast<char*>(cursor);
   uint16_t offset = 0;
@@ -74,28 +92,43 @@ TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<in
 bool TextBlock::hasRuby() const { return false; }
 
 bool ImageDecoderFactory::isFormatSupported(const std::string& path) { return path.ends_with(".jpg"); }
-ImageToFramebufferDecoder* ImageDecoderFactory::getDecoder(const std::string&) { return nullptr; }
-size_t ImageDimsProbe::write(uint8_t) { return 0; }
-size_t ImageDimsProbe::write(const uint8_t*, size_t) { return 0; }
-bool ImageDimsProbe::getDimensions(ImageDimensions&) const { return false; }
+namespace {
+class FixtureImageDecoder final : public ImageToFramebufferDecoder {
+ public:
+  bool decodeToFramebuffer(const std::string&, GfxRenderer&, const RenderConfig&) override { return false; }
+  bool getDimensions(const std::string&, ImageDimensions& dims) const override {
+    GfxRenderer::fileProbeHadLoan = GfxRenderer::loanActive;
+    dims = {800, 200};
+    return true;
+  }
+  const char* getFormatName() const override { return "JPEG"; }
+};
+}  // namespace
+bool ImageDecoderFactory::supportsMemorySource(const std::string&) { return false; }
+ImageToFramebufferDecoder* ImageDecoderFactory::getDecoder(const std::string&) {
+  static FixtureImageDecoder decoder;
+  return &decoder;
+}
 
 ImageBlock::ImageBlock(std::string imagePath, std::string sourcePath, const int16_t width, const int16_t height)
     : imagePath(std::move(imagePath)), sourcePath(std::move(sourcePath)), width(width), height(height) {}
 
 void PageImage::render(GfxRenderer&, int, int, int, bool) {}
 void PageImage::renderPlaceholder(GfxRenderer&, int, int, bool) const {}
-bool PageImage::serialize(FsFile&) { return false; }
+bool PageImage::serialize(Print&) { return false; }
 
 PreviewBlockLocator::PreviewBlockLocator(const char*, IsBlockTagFn) {}
 PreviewBlockLocator::~PreviewBlockLocator() = default;
 bool PreviewBlockLocator::feed(const char*, int, bool) { return false; }
 
 CompactTableLayout::CompactTableLayout(GfxRenderer& renderer, int, uint16_t, uint16_t, uint16_t, uint8_t,
-                                       BlockStyle tableStyle)
-    : renderer_(renderer), tableStyle_(tableStyle) {}
+                                       BlockStyle tableStyle, int8_t characterSpacing)
+    : renderer_(renderer), tableStyle_(tableStyle), characterSpacing_(characterSpacing) {}
 bool CompactTableLayout::beginRow() { return true; }
 bool CompactTableLayout::beginCell(bool, uint8_t, uint32_t, const BlockStyle&) { return true; }
-bool CompactTableLayout::appendWord(std::string_view, EpdFontFamily::Style, bool, bool, uint8_t) { return true; }
+bool CompactTableLayout::appendWord(std::string_view, EpdFontFamily::Style, bool, bool, uint8_t, uint32_t, bool, bool) {
+  return true;
+}
 bool CompactTableLayout::endCell(const std::vector<std::pair<int, FootnoteEntry>>&) { return true; }
 CompactTableLayout::RowResult CompactTableLayout::finishRow(TableFragmentRow&, std::vector<std::shared_ptr<TextBlock>>&,
                                                             std::vector<FootnoteEntry>&, uint32_t&) {
@@ -103,8 +136,38 @@ CompactTableLayout::RowResult CompactTableLayout::finishRow(TableFragmentRow&, s
 }
 
 void PageLine::render(GfxRenderer&, int, int, int, bool) {}
-bool PageLine::serialize(FsFile&) { return false; }
+bool PageLine::serialize(Print&) { return false; }
 void PageHorizontalRule::render(GfxRenderer&, int, int, int, bool) {}
-bool PageHorizontalRule::serialize(FsFile&) { return false; }
+bool PageHorizontalRule::serialize(Print&) { return false; }
 void PageTableFragment::render(GfxRenderer&, int, int, int, bool) {}
-bool PageTableFragment::serialize(FsFile&) { return false; }
+bool PageTableFragment::serialize(Print&) { return false; }
+
+PageDropCap::PageDropCap(uint8_t size, uint16_t scale, EpdFontFamily::Style style, const char* source, int16_t x,
+                         int16_t y, uint32_t family)
+    : PageElement(x, y), fontSize(size), fontFamily(family), scale256(scale), style(style) {
+  std::strncpy(text, source, MAX_TEXT_BYTES);
+}
+void PageDropCap::render(GfxRenderer&, int, int, int, bool) {}
+bool PageDropCap::serialize(Print&) { return false; }
+void PageBorderBox::render(GfxRenderer&, int, int, int, bool) {}
+bool PageBorderBox::serialize(Print&) { return false; }
+
+int TextBlock::resolvedFontId(const GfxRenderer& r, int font) const {
+  return r.getFontIdForSize(font, blockStyle.fontSize);
+}
+int TextBlock::wordFontId(const GfxRenderer& r, int font, uint16_t i) const {
+  return r.resolveBookFont(resolvedFontId(r, font), wordFamilies ? wordFamilies[i] : 0, wordFontSize(i));
+}
+int TextBlock::maxAscender(const GfxRenderer& r, int font) const {
+  int result = r.getFontAscenderSize(resolvedFontId(r, font));
+  for (uint16_t i = 0; i < numWords; ++i) result = std::max(result, r.getFontAscenderSize(wordFontId(r, font, i)));
+  return result;
+}
+RuledLineLayout TextBlock::ruledLayout(const GfxRenderer& r, int font, int requested) const {
+  return RuledLineLayout::center(r, font, requested, {0, r.getFontAscenderSize(font)});
+}
+int TextBlock::maxLineHeight(const GfxRenderer& r, int font) const {
+  int result = r.getLineHeight(resolvedFontId(r, font));
+  for (uint16_t i = 0; i < numWords; ++i) result = std::max(result, r.getLineHeight(wordFontId(r, font, i)));
+  return result;
+}
